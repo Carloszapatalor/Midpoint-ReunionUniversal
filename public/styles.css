@@ -1,0 +1,33 @@
+.cell-active {
+  background-color: #3b82f6 !important;
+}
+
+.cell-utc {
+  background-color: #10b981 !important;
+}
+
+.grid-cell {
+  height: 22px;
+  border: 1px solid #334155;
+}
+
+.day-label {
+  font-size: 9px;
+  color: #94a3b8;
+  text-transform: uppercase;
+  font-weight: bold;
+}
+
+.panel {
+  background: rgba(30, 41, 59, 0.5);
+  padding: 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid #334155;
+}
+
+.panel h2 {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}

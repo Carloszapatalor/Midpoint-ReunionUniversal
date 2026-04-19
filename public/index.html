@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Schedule App</title>
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- CSS separado -->
+  <link rel="stylesheet" href="/styles.css">
+</head>
+
+<body class="bg-slate-900 text-slate-200 p-4 font-sans">
+
+<div class="max-w-6xl mx-auto text-center">
+
+  <h1 class="text-xl font-bold text-blue-400 mb-2">
+    Horarios
+  </h1>
+
+  <div class="flex items-center justify-center gap-2">
+    <input id="nick" placeholder="Nick"
+      class="bg-slate-800 border border-slate-700 px-3 py-1 text-sm rounded outline-none focus:ring-1 focus:ring-blue-500">
+    <button id="btn-signin" onclick="signIn()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded text-sm">
+      Sign In
+    </button>
+  </div>
+
+  <p id="status" class="text-xs mt-2 h-4 text-slate-400"></p>
+
+  <div class="mt-3">
+    <button id="btn-save" onclick="saveUser()" disabled
+      class="bg-green-600 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-1 rounded text-sm">
+      Guardar
+    </button>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+
+    <div class="panel">
+      <h2>Horario Local</h2>
+      <div id="grid-local"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Horario UTC</h2>
+      <div id="grid-utc" class="pointer-events-none"></div>
+    </div>
+
+  </div>
+
+</div>
+
+<!-- JS separado -->
+<script src="/app.js"></script>
+
+</body>
+</html>

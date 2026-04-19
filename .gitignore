@@ -1,0 +1,14 @@
+# Environment variables
+.env
+
+# Deno
+.deno/
+deno.lock
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
