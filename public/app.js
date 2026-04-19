@@ -17,7 +17,7 @@ function setLoggedIn(user) {
   currentUser = user;
   document.getElementById("nick").value = user.nick;
   document.getElementById("nick").disabled = true;
-  document.getElementById("btn-signin").textContent = "Sign Out";
+  document.getElementById("btn-signin").textContent = "Cerrar Sesión";
   document.getElementById("btn-signin").classList.replace("bg-blue-600", "bg-slate-600");
   document.getElementById("btn-save").disabled = false;
   setStatus(`Conectado como ${user.nick}`, "ok");
@@ -28,12 +28,32 @@ function setLoggedOut() {
   localStorage.removeItem("uid");
   document.getElementById("nick").value = "";
   document.getElementById("nick").disabled = false;
-  document.getElementById("btn-signin").textContent = "Sign In";
+  document.getElementById("btn-signin").textContent = "Iniciar Sesión";
   document.getElementById("btn-signin").classList.replace("bg-slate-600", "bg-blue-600");
   document.getElementById("btn-save").disabled = true;
   localSchedule = [];
   updateUI();
   setStatus("", "info");
+}
+
+function parseSchedule(rawSchedule) {
+  if (Array.isArray(rawSchedule)) return rawSchedule;
+  if (typeof rawSchedule === "string" && rawSchedule.trim()) {
+    try {
+      const parsed = JSON.parse(rawSchedule);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function applyUserData(user) {
+  localStorage.setItem("uid", user.uid);
+  localSchedule = parseSchedule(user.schedule);
+  updateUI();
+  setLoggedIn({ uid: user.uid, nick: user.nick });
 }
 
 async function signIn() {
@@ -52,14 +72,19 @@ async function signIn() {
   try {
     const res = await fetch(`/api/nick/${encodeURIComponent(nick)}`);
     const data = await res.json();
+    
+    console.log("📊 Respuesta de búsqueda por nick:", data);
 
     if (data.exists) {
       // Usuario encontrado → cargar datos
       const user = data.data;
-      localStorage.setItem("uid", user.uid);
-      localSchedule = JSON.parse(user.schedule || "[]");
-      updateUI();
-      setLoggedIn({ uid: user.uid, nick: user.nick });
+      console.log("✅ Usuario encontrado:", user);
+      console.log("📅 Schedule desde BD:", user.schedule);
+
+      applyUserData(user);
+
+      console.log("📌 localSchedule parseado:", localSchedule);
+      setStatus(`Bienvenido de vuelta, ${nick}!`, "ok");
     } else {
       // Usuario no existe → crear
       const uid = generateUID();
@@ -71,7 +96,26 @@ async function signIn() {
         body: JSON.stringify({ uid, nick, schedule: [] })
       });
 
-      if (!saveRes.ok) { setStatus("Error al crear usuario", "error"); return; }
+      if (saveRes.status === 409) {
+        // Si hay conflicto, intentar cargar usuario existente por nick
+        const existingRes = await fetch(`/api/nick/${encodeURIComponent(nick)}`);
+        const existingData = await existingRes.json();
+        if (existingData.exists && existingData.data) {
+          applyUserData(existingData.data);
+          setStatus(`Bienvenido de vuelta, ${nick}!`, "ok");
+          return;
+        }
+
+        localStorage.removeItem("uid");
+        setStatus("❌ Ese nick ya está en uso", "error");
+        return;
+      }
+
+      if (!saveRes.ok) { 
+        localStorage.removeItem("uid");
+        setStatus("Error al crear usuario", "error"); 
+        return; 
+      }
 
       localSchedule = [];
       updateUI();
@@ -79,6 +123,7 @@ async function signIn() {
       setStatus(`Bienvenido, ${nick}! Cuenta creada.`, "ok");
     }
   } catch (e) {
+    console.error("❌ Error en signIn:", e);
     setStatus("Error de conexión", "error");
   } finally {
     document.getElementById("btn-signin").disabled = false;
