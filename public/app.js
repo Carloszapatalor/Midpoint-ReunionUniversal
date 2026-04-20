@@ -338,11 +338,7 @@ function renderParticipantList(participants) {
   container.innerHTML = participants
     .slice()
     .sort((left, right) => left.nick.localeCompare(right.nick))
-    .map((participant) => {
-      const slots = parseSchedule(participant.utcSchedule).length;
-      const timezone = participant.timezone || "UTC";
-      return `<div class="participant-pill">${participant.nick} <span>${timezone} · ${slots} bloque(s)</span></div>`;
-    })
+    .map((participant) => `<div class="participant-pill">${participant.nick}</div>`)
     .join("");
 }
 
@@ -379,6 +375,7 @@ function clearUtcCells() {
     cell.classList.remove("cell-utc", "cell-best", "cell-all");
     cell.textContent = "";
     cell.style.removeProperty("--availability-strength");
+    cell.style.removeProperty("--availability-glow");
     cell.title = "";
     cell.dataset.names = "";
     cell.dataset.count = "";
@@ -405,10 +402,9 @@ function updateUI() {
     const uniqueNicks = [...new Set(entry.nicks)].sort((left, right) => left.localeCompare(right));
 
     cell.classList.add("cell-utc");
-    if (entry.count === maxCount && maxCount > 0) cell.classList.add("cell-best");
-    if (entry.count === participants.length && participants.length > 0) cell.classList.add("cell-all");
     cell.style.setProperty("--availability-strength", String(entry.count / participantCount));
-    cell.textContent = String(entry.count);
+    cell.style.setProperty("--availability-glow", String(entry.count / Math.max(maxCount || 1, 1)));
+    cell.textContent = "";
     cell.dataset.slot = slot;
     cell.dataset.count = String(entry.count);
     cell.dataset.names = JSON.stringify(uniqueNicks);
