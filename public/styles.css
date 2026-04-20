@@ -71,11 +71,16 @@ body.page-shell {
 }
 
 .brand-mark {
-  color: var(--ink);
+  display: inline-block;
+  background: linear-gradient(135deg, #e8eefa 0%, #38bdf8 45%, #2563eb 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
   text-decoration: none;
-  font-size: 1.05rem;
-  font-weight: 800;
-  letter-spacing: 0.14em;
+  font-size: clamp(1.5rem, 2vw, 2.1rem);
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  line-height: 1;
   text-transform: uppercase;
 }
 
