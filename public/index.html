@@ -13,7 +13,7 @@
       <a href="/" class="brand-mark">Agenda</a>
       <div class="topbar-actions">
         <button id="nav-dashboard-btn" type="button" class="action-btn action-btn-secondary" onclick="goToDashboard()">
-          Login / Crear reunion
+          Crear reunion
         </button>
       </div>
     </div>
@@ -22,7 +22,7 @@
   <main class="page-wrap page-main">
     <section id="dashboard-view" class="view-stack hidden">
       <section class="hero-panel">
-        <p class="eyebrow">Panel privado</p>
+        <!-- <p class="eyebrow">Panel privado</p> -->
         <h1 id="dashboard-title">Inicia sesion para crear reuniones</h1>
         <p id="dashboard-copy" class="hero-copy">
           Crea tu usuario con nick y contrasena para administrar reuniones propias. Los invitados siguen entrando solo con el link y su nick.
@@ -33,19 +33,19 @@
         <div class="panel-header panel-header-compact">
           <div>
             <p class="panel-kicker">Acceso</p>
-            <h2>Login</h2>
+            <h2>Iniciar Sesión</h2>
           </div>
           <p class="panel-note">Tu cuenta sirve para crear reuniones y verlas en tu panel.</p>
         </div>
 
-        <div class="auth-form-grid">
+        <div class="auth-form-grid auth-form-grid-single">
           <input id="auth-username" type="text" placeholder="Usuario" class="field-input">
           <input id="auth-password" type="password" placeholder="Contrasena" class="field-input">
         </div>
 
-        <div class="auth-row auth-row-wrap">
+        <div class="auth-row auth-row-wrap auth-actions-row">
           <button id="btn-login" type="button" class="action-btn action-btn-primary" onclick="loginUser()">
-            Iniciar sesion
+            Iniciar sesión
           </button>
           <button id="btn-register" type="button" class="action-btn action-btn-secondary" onclick="registerUser()">
             Crear usuario
@@ -53,6 +53,11 @@
         </div>
 
         <p id="auth-status" class="status-line"></p>
+
+        <div class="auth-links-row">
+          <!-- <a href="/" class="auth-link">No tienes cuenta? Registrate arriba</a> -->
+          <a href="/recuperar/token" class="auth-link">¿Olvidaste tu contraseña?</a>
+        </div>
       </section>
 
       <section id="dashboard-card" class="panel hidden">

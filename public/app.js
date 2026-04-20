@@ -150,7 +150,7 @@ function clearAuthSession() {
 function updateNavigation() {
   const button = query("nav-dashboard-btn");
   if (!button) return;
-  button.textContent = state.authUser ? `Panel de ${state.authUser.username}` : "Login / Crear reunion";
+  button.textContent = state.authUser ? `Panel de ${state.authUser.username}` : "Crear reunion";
 }
 
 function showView(mode) {
@@ -310,6 +310,80 @@ async function registerUser() {
     setLineStatus("auth-status", error.message || "Error al crear usuario", "error");
   } finally {
     query("btn-register").disabled = false;
+  }
+}
+
+async function requestPasswordReset() {
+  const username = query("recovery-username").value.trim() || query("auth-username").value.trim();
+  if (!username) {
+    setLineStatus("recovery-status", "Escribe tu usuario", "error");
+    return;
+  }
+
+  query("btn-forgot").disabled = true;
+  setLineStatus("recovery-status", "Generando codigo temporal...", "loading");
+
+  try {
+    const { response, payload } = await apiFetch("/api/auth/forgot-password", {
+      method: "POST",
+      body: { username },
+    });
+
+    if (!response.ok) {
+      throw new Error(payload?.error || "No se pudo generar el codigo");
+    }
+
+    query("recovery-username").value = username;
+
+    if (payload?.resetToken) {
+      query("recovery-token").value = payload.resetToken;
+      const expires = payload.expiresAtUTC ? ` (expira ${formatDate(payload.expiresAtUTC)})` : "";
+      setLineStatus("recovery-status", `Codigo generado${expires}. Ya lo deje pegado en el campo.`, "ok");
+    } else {
+      setLineStatus("recovery-status", payload?.message || "Si el usuario existe, se genero un codigo temporal.", "info");
+    }
+  } catch (error) {
+    console.error(error);
+    setLineStatus("recovery-status", error.message || "Error al generar codigo", "error");
+  } finally {
+    query("btn-forgot").disabled = false;
+  }
+}
+
+async function resetPasswordWithToken() {
+  const username = query("recovery-username").value.trim() || query("auth-username").value.trim();
+  const token = query("recovery-token").value.trim();
+  const newPassword = query("recovery-new-password").value;
+
+  if (!username || !token || !newPassword) {
+    setLineStatus("recovery-status", "Completa usuario, codigo y nueva contrasena", "error");
+    return;
+  }
+
+  query("btn-reset-password").disabled = true;
+  setLineStatus("recovery-status", "Restableciendo contrasena...", "loading");
+
+  try {
+    const { response, payload } = await apiFetch("/api/auth/reset-password", {
+      method: "POST",
+      body: { username, token, newPassword },
+    });
+
+    if (!response.ok || !payload?.ok) {
+      throw new Error(payload?.error || "No se pudo restablecer la contrasena");
+    }
+
+    query("auth-username").value = username;
+    query("auth-password").value = "";
+    query("recovery-token").value = "";
+    query("recovery-new-password").value = "";
+    setLineStatus("recovery-status", payload.message || "Contrasena actualizada.", "ok");
+    setLineStatus("auth-status", "Contrasena cambiada. Ahora inicia sesion.", "ok");
+  } catch (error) {
+    console.error(error);
+    setLineStatus("recovery-status", error.message || "Error al restablecer contrasena", "error");
+  } finally {
+    query("btn-reset-password").disabled = false;
   }
 }
 
@@ -971,6 +1045,8 @@ async function init() {
 globalThis.goToDashboard = goToDashboard;
 globalThis.loginUser = loginUser;
 globalThis.registerUser = registerUser;
+globalThis.requestPasswordReset = requestPasswordReset;
+globalThis.resetPasswordWithToken = resetPasswordWithToken;
 globalThis.logoutUser = logoutUser;
 globalThis.createOwnedMeeting = createOwnedMeeting;
 globalThis.openOwnedMeeting = openOwnedMeeting;

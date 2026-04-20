@@ -26,6 +26,14 @@ type UserRecord = {
   updatedAtUTC: string;
 };
 
+type RecoveryTokenRecord = {
+  userUid: string;
+  tokenHash: string;
+  expiresAtUTC: string;
+  usedAtUTC: string | null;
+  createdAtUTC: string;
+};
+
 type MeetingParticipantRecord = {
   uid: string;
   meetingUid: string;
@@ -137,13 +145,13 @@ async function executeStatement(q: string, params: unknown[] = []) {
   return executeStatements([{ q, params }]);
 }
 
-async function getTableColumns(tableName: "users" | "meetings" | "meeting_participants") {
+async function getTableColumns(tableName: "users" | "meetings" | "meeting_participants" | "recovery_tokens") {
   const payload = await executeStatement(`PRAGMA table_info(${tableName})`);
   const rows = rowsToObjects(getFirstResult(payload));
   return new Set(rows.map((row) => String(row.name || "")));
 }
 
-async function ensureColumnExists(tableName: "users" | "meetings", columnName: string, definition: string) {
+async function ensureColumnExists(tableName: "users" | "meetings" | "recovery_tokens", columnName: string, definition: string) {
   const columns = await getTableColumns(tableName);
   if (!columns.has(columnName)) {
     await executeStatement(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
@@ -188,6 +196,26 @@ async function ensureSchema() {
     await executeStatement("CREATE INDEX IF NOT EXISTS idx_meetings_owner_uid ON meetings (owner_uid)");
 
     await executeStatement(`
+      CREATE TABLE IF NOT EXISTS recovery_tokens (
+        uid TEXT PRIMARY KEY,
+        user_uid TEXT NOT NULL,
+        token_hash TEXT NOT NULL,
+        expires_at_utc TEXT NOT NULL,
+        used_at_utc TEXT,
+        created_at_utc TEXT NOT NULL,
+        FOREIGN KEY (user_uid) REFERENCES users(uid)
+      )
+    `);
+    await ensureColumnExists("recovery_tokens", "user_uid", "TEXT");
+    await ensureColumnExists("recovery_tokens", "token_hash", "TEXT");
+    await ensureColumnExists("recovery_tokens", "expires_at_utc", "TEXT");
+    await ensureColumnExists("recovery_tokens", "used_at_utc", "TEXT");
+    await ensureColumnExists("recovery_tokens", "created_at_utc", "TEXT");
+    await executeStatement("CREATE INDEX IF NOT EXISTS idx_recovery_tokens_user_uid ON recovery_tokens (user_uid)");
+    await executeStatement("CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_tokens_token_hash ON recovery_tokens (token_hash)");
+    await executeStatement("CREATE INDEX IF NOT EXISTS idx_recovery_tokens_expires_at_utc ON recovery_tokens (expires_at_utc)");
+
+    await executeStatement(`
       CREATE TABLE IF NOT EXISTS meeting_participants (
         uid TEXT PRIMARY KEY,
         meeting_uid TEXT NOT NULL,
@@ -221,6 +249,16 @@ function mapUser(record: Record<string, unknown>): UserRecord {
     sessionToken: record.session_token ? String(record.session_token) : null,
     createdAtUTC: String(record.created_at_utc || ""),
     updatedAtUTC: String(record.updated_at_utc || ""),
+  };
+}
+
+function mapRecoveryToken(record: Record<string, unknown>): RecoveryTokenRecord {
+  return {
+    userUid: String(record.user_uid || ""),
+    tokenHash: String(record.token_hash || ""),
+    expiresAtUTC: String(record.expires_at_utc || ""),
+    usedAtUTC: record.used_at_utc ? String(record.used_at_utc) : null,
+    createdAtUTC: String(record.created_at_utc || ""),
   };
 }
 
@@ -337,6 +375,85 @@ export async function setUserSessionTokenTorso(uid: string, sessionToken: string
   `, [sessionToken, updatedAtUTC, uid]);
 
   return getUserByUidTorso(uid);
+}
+
+export async function updateUserPasswordHashTorso(uid: string, passwordHash: string, updatedAtUTC: string) {
+  await ensureSchema();
+
+  await executeStatement(`
+    UPDATE users
+    SET password_hash = ?, session_token = NULL, updated_at_utc = ?
+    WHERE uid = ?
+  `, [passwordHash, updatedAtUTC, uid]);
+
+  return getUserByUidTorso(uid);
+}
+
+export async function createPasswordRecoveryTokenTorso(data: {
+  uid: string;
+  userUid: string;
+  tokenHash: string;
+  expiresAtUTC: string;
+  createdAtUTC: string;
+}) {
+  await ensureSchema();
+
+  const uid = normalizeString(data.uid);
+  const userUid = normalizeString(data.userUid);
+  const tokenHash = normalizeString(data.tokenHash);
+  const expiresAtUTC = normalizeString(data.expiresAtUTC);
+  const createdAtUTC = normalizeString(data.createdAtUTC);
+
+  if (!uid || !userUid || !tokenHash || !expiresAtUTC || !createdAtUTC) {
+    throw new Error("uid, userUid, tokenHash, expiresAtUTC y createdAtUTC son requeridos");
+  }
+
+  await executeStatement("UPDATE recovery_tokens SET used_at_utc = ? WHERE user_uid = ? AND used_at_utc IS NULL", [createdAtUTC, userUid]);
+
+  const columns = await getTableColumns("recovery_tokens");
+  if (columns.has("uid")) {
+    await executeStatement(`
+      INSERT INTO recovery_tokens (uid, user_uid, token_hash, expires_at_utc, used_at_utc, created_at_utc)
+      VALUES (?, ?, ?, ?, NULL, ?)
+    `, [uid, userUid, tokenHash, expiresAtUTC, createdAtUTC]);
+    return;
+  }
+
+  await executeStatement(`
+    INSERT INTO recovery_tokens (user_uid, token_hash, expires_at_utc, used_at_utc, created_at_utc)
+    VALUES (?, ?, ?, NULL, ?)
+  `, [userUid, tokenHash, expiresAtUTC, createdAtUTC]);
+}
+
+export async function getActivePasswordRecoveryTokenTorso(tokenHash: string, nowUTC: string) {
+  await ensureSchema();
+
+  const cleanHash = normalizeString(tokenHash);
+  const cleanNowUTC = normalizeString(nowUTC);
+  if (!cleanHash || !cleanNowUTC) return null;
+
+  const payload = await executeStatement(`
+    SELECT * FROM recovery_tokens
+    WHERE token_hash = ?
+      AND used_at_utc IS NULL
+      AND expires_at_utc > ?
+    LIMIT 1
+  `, [cleanHash, cleanNowUTC]);
+
+  const rows = rowsToObjects(getFirstResult(payload));
+  return rows[0] ? mapRecoveryToken(rows[0]) : null;
+}
+
+export async function markPasswordRecoveryTokenUsedTorso(tokenHash: string, usedAtUTC: string) {
+  await ensureSchema();
+
+  const cleanTokenHash = normalizeString(tokenHash);
+  const cleanUsedAtUTC = normalizeString(usedAtUTC);
+  if (!cleanTokenHash || !cleanUsedAtUTC) {
+    throw new Error("tokenHash y usedAtUTC son requeridos");
+  }
+
+  await executeStatement("UPDATE recovery_tokens SET used_at_utc = ? WHERE token_hash = ?", [cleanUsedAtUTC, cleanTokenHash]);
 }
 
 export async function createMeetingTorso(title: string, ownerUid: string) {

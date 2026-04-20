@@ -1,16 +1,21 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { serveStatic } from "https://deno.land/x/hono/middleware.ts";
+import type { Context } from "https://deno.land/x/hono/mod.ts";
 import {
+  createPasswordRecoveryTokenTorso,
   createMeetingTorso,
   createUserTorso,
+  getActivePasswordRecoveryTokenTorso,
   getMeetingParticipantByNickTorso,
   getMeetingParticipantByUidTorso,
   getMeetingTorso,
   getUserBySessionTokenTorso,
   getUserByUsernameTorso,
   listMeetingsByOwnerTorso,
+  markPasswordRecoveryTokenUsedTorso,
   saveMeetingParticipantTorso,
   setUserSessionTokenTorso,
+  updateUserPasswordHashTorso,
 } from "./torso.ts";
 
 const app = new Hono();
@@ -22,6 +27,103 @@ async function sha256Hex(value: string) {
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function generateRecoveryToken() {
+  return `${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
+}
+
+async function handleForgotPassword(c: Context): Promise<Response> {
+  try {
+    const { username } = await c.req.json() as { username?: string };
+    const cleanUsername = String(username || "").trim();
+
+    // Always return 200 to avoid leaking if a username exists.
+    const genericResponse = {
+      ok: true,
+      message: "Si el usuario existe, se genero un codigo temporal de recuperacion.",
+    };
+
+    if (!cleanUsername) {
+      return c.json(genericResponse);
+    }
+
+    const user = await getUserByUsernameTorso(cleanUsername);
+    if (!user) {
+      return c.json(genericResponse);
+    }
+
+    const rawToken = generateRecoveryToken();
+    const tokenHash = await sha256Hex(rawToken);
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 15 * 60 * 1000);
+
+    await createPasswordRecoveryTokenTorso({
+      uid: crypto.randomUUID(),
+      userUid: user.uid,
+      tokenHash,
+      expiresAtUTC: expiresAt.toISOString(),
+      createdAtUTC: now.toISOString(),
+    });
+
+    // Dev helper: allows testing reset flow without email provider.
+    const exposeToken = (Deno.env.get("DENO_ENV") || "development") !== "production";
+    if (exposeToken) {
+      return c.json({
+        ...genericResponse,
+        resetToken: rawToken,
+        expiresAtUTC: expiresAt.toISOString(),
+      });
+    }
+
+    return c.json(genericResponse);
+  } catch (error) {
+    console.error("Error iniciando recuperacion de contrasena:", error);
+    return c.json({ error: "Error al iniciar recuperacion de contrasena" }, 500);
+  }
+}
+
+async function handleResetPassword(c: Context): Promise<Response> {
+  try {
+    const { username, token, newPassword } = await c.req.json() as {
+      username?: string;
+      token?: string;
+      newPassword?: string;
+    };
+    const cleanUsername = String(username || "").trim();
+    const cleanToken = String(token || "").trim();
+    const cleanPassword = String(newPassword || "");
+
+    if (!cleanUsername || !cleanToken || !cleanPassword) {
+      return c.json({ error: "username, token y newPassword son requeridos" }, 400);
+    }
+
+    if (cleanPassword.length < 6) {
+      return c.json({ error: "La contrasena debe tener al menos 6 caracteres" }, 400);
+    }
+
+    const user = await getUserByUsernameTorso(cleanUsername);
+    if (!user) {
+      return c.json({ error: "Token invalido o expirado" }, 400);
+    }
+
+    const tokenHash = await sha256Hex(cleanToken);
+    const nowUTC = new Date().toISOString();
+    const recoveryToken = await getActivePasswordRecoveryTokenTorso(tokenHash, nowUTC);
+
+    if (!recoveryToken || recoveryToken.userUid !== user.uid) {
+      return c.json({ error: "Token invalido o expirado" }, 400);
+    }
+
+    const passwordHash = await sha256Hex(cleanPassword);
+    await updateUserPasswordHashTorso(user.uid, passwordHash, nowUTC);
+    await markPasswordRecoveryTokenUsedTorso(recoveryToken.tokenHash, nowUTC);
+
+    return c.json({ ok: true, message: "Contrasena actualizada. Inicia sesion con la nueva clave." });
+  } catch (error) {
+    console.error("Error restableciendo contrasena:", error);
+    return c.json({ error: "Error al restablecer contrasena" }, 500);
+  }
 }
 
 function getAuthToken(c: RequestContext) {
@@ -155,6 +257,22 @@ app.post("/api/auth/logout", async (c) => {
   }
 });
 
+app.post("/api/auth/forgot-password", async (c) => {
+  return handleForgotPassword(c);
+});
+
+app.post("/api/auth/reset-password", async (c) => {
+  return handleResetPassword(c);
+});
+
+app.post("/api/auth/token", async (c) => {
+  return handleForgotPassword(c);
+});
+
+app.post("/api/auth/restablecer", async (c) => {
+  return handleResetPassword(c);
+});
+
 app.get("/api/dashboard/meetings", async (c) => {
   try {
     const user = await requireAuth(c);
@@ -271,6 +389,9 @@ app.post("/api/meetings/:meetingUid/participants", async (c) => {
     return c.json({ error: message }, status);
   }
 });
+
+app.get("/recuperar/token", serveStatic({ path: "./public/recovery-token.html" }));
+app.get("/recuperar/restablecer", serveStatic({ path: "./public/recovery-reset.html" }));
 
 app.get("*", serveStatic({ root: "./public" }));
 

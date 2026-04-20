@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recuperar acceso | Agenda</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="page-shell text-stone-100">
+  <header class="topbar-shell">
+    <div class="topbar page-wrap page-wrap-tight">
+      <a href="/" class="brand-mark">Agenda</a>
+    </div>
+  </header>
+
+  <main class="page-wrap auth-recovery-shell">
+    <section class="recovery-clean-card">
+      <h1>Recuperar acceso</h1>
+      <p class="recovery-copy">Ingresa tu usuario para generar un codigo temporal.</p>
+
+      <label class="clean-field-label" for="recovery-username">Tu usuario</label>
+      <div class="clean-input-wrap">
+        <input id="recovery-username" type="text" class="clean-input" placeholder="ej. maria_admin">
+      </div>
+
+      <button id="btn-request-token" type="button" class="action-btn action-btn-success action-btn-block" onclick="requestRecoveryToken()">
+        Generar codigo temporal
+      </button>
+
+      <p id="recovery-status" class="status-line"></p>
+
+      <div class="clean-links-row">
+        <a href="/" class="auth-link">Volver a login</a>
+        <a href="/recuperar/restablecer" class="auth-link">Ya tengo el codigo</a>
+      </div>
+    </section>
+  </main>
+
+  <script src="/recovery.js"></script>
+</body>
+</html>

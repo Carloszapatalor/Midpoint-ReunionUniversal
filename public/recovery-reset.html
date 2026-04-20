@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Restablecer contrasena | Agenda</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="page-shell text-stone-100">
+  <header class="topbar-shell">
+    <div class="topbar page-wrap page-wrap-tight">
+      <a href="/" class="brand-mark">Agenda</a>
+    </div>
+  </header>
+
+  <main class="page-wrap auth-recovery-shell">
+    <section class="recovery-clean-card">
+      <h1>Restablecer contrasena</h1>
+      <p class="recovery-copy">Usa el codigo temporal para definir una nueva contrasena.</p>
+
+      <label class="clean-field-label" for="reset-username">Tu usuario</label>
+      <div class="clean-input-wrap">
+        <input id="reset-username" type="text" class="clean-input" placeholder="ej. maria_admin">
+      </div>
+
+      <label class="clean-field-label" for="reset-token">Codigo temporal</label>
+      <div class="clean-input-wrap">
+        <input id="reset-token" type="text" class="clean-input" placeholder="pega aqui el codigo">
+      </div>
+
+      <label class="clean-field-label" for="reset-password">Nueva contrasena</label>
+      <div class="clean-input-wrap">
+        <input id="reset-password" type="password" class="clean-input" placeholder="minimo 6 caracteres">
+      </div>
+
+      <button id="btn-reset-password" type="button" class="action-btn action-btn-success action-btn-block" onclick="submitPasswordReset()">
+        Restablecer
+      </button>
+
+      <p id="reset-status" class="status-line"></p>
+
+      <div class="clean-links-row">
+        <a href="/recuperar/token" class="auth-link">No tengo codigo aun</a>
+        <a href="/" class="auth-link">Volver a login</a>
+      </div>
+    </section>
+  </main>
+
+  <script src="/recovery.js"></script>
+</body>
+</html>
