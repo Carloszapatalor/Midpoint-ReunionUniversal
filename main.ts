@@ -1,29 +1,96 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { serveStatic } from "https://deno.land/x/hono/middleware.ts";
 import {
+  consumeRecoveryTokenTorso,
   createMeetingTorso,
+  createRecoveryTokenTorso,
   getMeetingParticipantByNickTorso,
   getMeetingParticipantByUidTorso,
   getMeetingTorso,
+  listMeetingsByParticipantUidsTorso,
+  listMeetingsByRecoveryEmailTorso,
   saveMeetingParticipantTorso,
 } from "./torso.ts";
+import { sendRecoveryEmail } from "./mailer.ts";
+
+const EMAIL_REGEX = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 const app = new Hono();
 
 app.post("/api/meetings", async (c) => {
   try {
-    const { title } = await c.req.json();
+    const { title, scheduledAtUTC } = await c.req.json();
 
     if (!String(title || "").trim()) {
       return c.json({ error: "El titulo es requerido" }, 400);
     }
 
-    const meeting = await createMeetingTorso(String(title));
+    const meeting = await createMeetingTorso(
+      String(title),
+      scheduledAtUTC == null ? null : String(scheduledAtUTC),
+    );
     return c.json({ ok: true, meeting }, 201);
   } catch (error) {
     console.error("Error creando reunion:", error);
     const message = error instanceof Error ? error.message : "Error al crear la reunion";
-    return c.json({ error: message }, 500);
+    const status = message.includes("invalida") ? 400 : 500;
+    return c.json({ error: message }, status);
+  }
+});
+
+app.post("/api/meetings/mine", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const rawUids = Array.isArray(body?.participantUids) ? body.participantUids : [];
+    const uids = rawUids.map((item: unknown) => String(item ?? "")).filter(Boolean);
+
+    if (!uids.length) {
+      return c.json({ meetings: [] });
+    }
+
+    const meetings = await listMeetingsByParticipantUidsTorso(uids);
+    return c.json({ meetings });
+  } catch (error) {
+    console.error("Error listando mis reuniones:", error);
+    return c.json({ error: "Error al listar las reuniones" }, 500);
+  }
+});
+
+app.post("/api/recovery/request", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const email = String(body?.email || "").trim().toLowerCase();
+
+    if (!EMAIL_REGEX.test(email)) {
+      return c.json({ error: "Email invalido" }, 400);
+    }
+
+    const matches = await listMeetingsByRecoveryEmailTorso(email);
+    if (matches.length > 0) {
+      const { token } = await createRecoveryTokenTorso(email);
+      await sendRecoveryEmail(email, token);
+    }
+
+    return c.json({ ok: true });
+  } catch (error) {
+    console.error("Error solicitando recovery:", error);
+    return c.json({ ok: true });
+  }
+});
+
+app.get("/api/recovery/resolve/:token", async (c) => {
+  try {
+    const token = c.req.param("token");
+    const email = await consumeRecoveryTokenTorso(token);
+    if (!email) {
+      return c.json({ ok: false }, 404);
+    }
+
+    const meetings = await listMeetingsByRecoveryEmailTorso(email);
+    return c.json({ ok: true, meetings });
+  } catch (error) {
+    console.error("Error resolviendo recovery:", error);
+    return c.json({ error: "Error al resolver el token" }, 500);
   }
 });
 
@@ -82,7 +149,7 @@ app.get("/api/meetings/:meetingUid/participants/nick/:nick", async (c) => {
 app.post("/api/meetings/:meetingUid/participants", async (c) => {
   try {
     const meetingUid = c.req.param("meetingUid");
-    const { uid, nick, localSchedule, utcSchedule, timezone } = await c.req.json();
+    const { uid, nick, localSchedule, utcSchedule, timezone, recoveryEmail } = await c.req.json();
 
     if (!uid || !nick) {
       return c.json({ error: "uid y nick son requeridos" }, 400);
@@ -97,13 +164,20 @@ app.post("/api/meetings/:meetingUid/participants", async (c) => {
       timezone: String(timezone || "UTC"),
       updatedAtLocal: now.toString(),
       updatedAtUTC: now.toISOString(),
+      recoveryEmail: recoveryEmail === undefined ? undefined : recoveryEmail,
     });
 
     return c.json({ ok: true, participant });
   } catch (error) {
     console.error("Error guardando participante:", error);
     const message = error instanceof Error ? error.message : "Error al guardar el participante";
-    const status = message.includes("ya esta en uso") ? 409 : message.includes("no existe") ? 404 : 500;
+    const status = message.includes("ya esta en uso")
+      ? 409
+      : message.includes("no existe")
+        ? 404
+        : message.includes("invalido")
+          ? 400
+          : 500;
     return c.json({ error: message }, status);
   }
 });

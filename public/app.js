@@ -1,5 +1,7 @@
 const dias = ["Lun", "Mar", "Mie", "Jue", "Vie", "Sab", "Dom"];
 const REFERENCE_MONDAY = { year: 2025, month: 0, day: 6 };
+const MY_MEETINGS_KEY = "agenda:myMeetings";
+const EMAIL_REGEX = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 let localSchedule = [];
 let currentMeeting = null;
@@ -167,6 +169,270 @@ function clearSession(meetingUid) {
   localStorage.removeItem(getSessionStorageKey(meetingUid));
 }
 
+function readMyMeetings() {
+  try {
+    const raw = localStorage.getItem(MY_MEETINGS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((entry) => entry && entry.meetingUid && entry.participantUid) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeMyMeetings(entries) {
+  try {
+    localStorage.setItem(MY_MEETINGS_KEY, JSON.stringify(entries));
+  } catch (error) {
+    console.error("No se pudo persistir myMeetings", error);
+  }
+}
+
+function rememberMeeting(entry) {
+  if (!entry?.meetingUid || !entry?.participantUid) return;
+
+  const existing = readMyMeetings();
+  const now = new Date().toISOString();
+  const filtered = existing.filter((item) => item.meetingUid !== entry.meetingUid);
+  const joinedAtUTC = existing.find((item) => item.meetingUid === entry.meetingUid)?.joinedAtUTC || now;
+
+  filtered.push({
+    meetingUid: entry.meetingUid,
+    participantUid: entry.participantUid,
+    nick: entry.nick || "",
+    title: entry.title || "",
+    scheduledAtUTC: entry.scheduledAtUTC || null,
+    createdAtUTC: entry.createdAtUTC || null,
+    joinedAtUTC,
+    lastSeenAtUTC: now,
+  });
+
+  writeMyMeetings(filtered);
+}
+
+function forgetMeeting(meetingUid) {
+  if (!meetingUid) return;
+  const filtered = readMyMeetings().filter((item) => item.meetingUid !== meetingUid);
+  writeMyMeetings(filtered);
+}
+
+function mergeMeetingsIntoStorage(serverMeetings) {
+  if (!Array.isArray(serverMeetings) || !serverMeetings.length) return;
+
+  const existing = readMyMeetings();
+  const byUid = new Map(existing.map((item) => [item.meetingUid, item]));
+  const now = new Date().toISOString();
+
+  serverMeetings.forEach((meeting) => {
+    if (!meeting?.uid || !meeting?.participantUid) return;
+    const prev = byUid.get(meeting.uid);
+    byUid.set(meeting.uid, {
+      meetingUid: meeting.uid,
+      participantUid: meeting.participantUid,
+      nick: meeting.nick || prev?.nick || "",
+      title: meeting.title || prev?.title || "",
+      scheduledAtUTC: meeting.scheduledAtUTC ?? prev?.scheduledAtUTC ?? null,
+      createdAtUTC: meeting.createdAtUTC || prev?.createdAtUTC || null,
+      joinedAtUTC: prev?.joinedAtUTC || now,
+      lastSeenAtUTC: now,
+    });
+  });
+
+  writeMyMeetings([...byUid.values()]);
+}
+
+function formatScheduledAt(iso) {
+  if (!iso) return "Sin fecha definida";
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return "Sin fecha definida";
+  try {
+    return parsed.toLocaleString(undefined, {
+      weekday: "short",
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return parsed.toISOString();
+  }
+}
+
+function classifyMyMeetings(entries) {
+  const now = Date.now();
+  const upcoming = [];
+  const past = [];
+
+  entries.forEach((entry) => {
+    const parsed = entry.scheduledAtUTC ? Date.parse(entry.scheduledAtUTC) : NaN;
+    if (!entry.scheduledAtUTC || !Number.isFinite(parsed) || parsed >= now) {
+      upcoming.push(entry);
+    } else {
+      past.push(entry);
+    }
+  });
+
+  upcoming.sort((left, right) => {
+    const a = left.scheduledAtUTC ? Date.parse(left.scheduledAtUTC) : Infinity;
+    const b = right.scheduledAtUTC ? Date.parse(right.scheduledAtUTC) : Infinity;
+    return a - b;
+  });
+  past.sort((left, right) => {
+    const a = left.scheduledAtUTC ? Date.parse(left.scheduledAtUTC) : 0;
+    const b = right.scheduledAtUTC ? Date.parse(right.scheduledAtUTC) : 0;
+    return b - a;
+  });
+
+  return { upcoming, past };
+}
+
+function renderMeetingCards(container, entries, { heading, pastTone = false } = {}) {
+  if (!entries.length) {
+    container.innerHTML = "";
+    return;
+  }
+
+  const cards = entries
+    .map((entry) => {
+      const title = escapeHtml(entry.title || "Reunion sin titulo");
+      const dateLabel = escapeHtml(formatScheduledAt(entry.scheduledAtUTC));
+      const nick = entry.nick ? `<span class="meeting-card-nick">${escapeHtml(entry.nick)}</span>` : "";
+      const dateClass = pastTone ? "meeting-card-date meeting-card-date-past" : "meeting-card-date";
+      return `
+        <button type="button" class="meeting-card" data-meeting-uid="${escapeHtml(entry.meetingUid)}">
+          <p class="meeting-card-title">${title}</p>
+          <p class="${dateClass}">${dateLabel}</p>
+          <p class="meeting-card-meta">${nick}</p>
+        </button>
+      `;
+    })
+    .join("");
+
+  const headingHtml = heading ? `<p class="meeting-cards-heading">${escapeHtml(heading)}</p>` : "";
+  container.innerHTML = headingHtml + cards;
+
+  container.querySelectorAll(".meeting-card").forEach((card) => {
+    card.addEventListener("click", () => {
+      const uid = card.dataset.meetingUid;
+      if (!uid) return;
+      const url = new URL(window.location.href);
+      url.searchParams.set("meeting", uid);
+      window.location.href = url.toString();
+    });
+  });
+}
+
+async function hydrateMyMeetingsPanel() {
+  const panel = document.getElementById("my-meetings-panel");
+  const upcomingEl = document.getElementById("my-meetings-upcoming");
+  const pastEl = document.getElementById("my-meetings-past");
+  if (!panel || !upcomingEl || !pastEl) return;
+
+  let entries = readMyMeetings();
+
+  if (!entries.length) {
+    panel.classList.add("hidden");
+    upcomingEl.innerHTML = "";
+    pastEl.innerHTML = "";
+    return;
+  }
+
+  panel.classList.remove("hidden");
+
+  const participantUids = entries.map((entry) => entry.participantUid).filter(Boolean);
+  try {
+    const response = await fetch("/api/meetings/mine", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantUids }),
+    });
+    if (response.ok) {
+      const payload = await response.json();
+      if (Array.isArray(payload.meetings) && payload.meetings.length) {
+        mergeMeetingsIntoStorage(payload.meetings);
+        entries = readMyMeetings();
+      }
+    }
+  } catch (error) {
+    console.error("No se pudo refrescar mis reuniones", error);
+  }
+
+  const { upcoming, past } = classifyMyMeetings(entries);
+  renderMeetingCards(upcomingEl, upcoming, { heading: "Proximas y sin fecha" });
+  renderMeetingCards(pastEl, past, { heading: "Historicas", pastTone: true });
+}
+
+function forgetAllMeetings() {
+  if (!confirm("Olvidar todas las reuniones guardadas en este navegador?")) return;
+  writeMyMeetings([]);
+  hydrateMyMeetingsPanel();
+  setRecoveryStatus("Historial local eliminado.", "info");
+}
+
+function setRecoveryStatus(message, type = "info") {
+  const el = document.getElementById("recovery-status");
+  if (!el) return;
+  el.dataset.state = type;
+  el.textContent = message;
+}
+
+async function requestRecovery() {
+  const input = document.getElementById("recovery-email");
+  if (!input) return;
+
+  const email = input.value.trim().toLowerCase();
+  if (!EMAIL_REGEX.test(email)) {
+    setRecoveryStatus("Escribe un email valido", "error");
+    return;
+  }
+
+  const button = document.getElementById("btn-recovery-request");
+  if (button) button.disabled = true;
+  setRecoveryStatus("Enviando link de recuperacion...", "loading");
+
+  try {
+    await fetch("/api/recovery/request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    setRecoveryStatus("Si el email existe, te enviamos un link. Revisa tu bandeja.", "ok");
+  } catch (error) {
+    console.error(error);
+    setRecoveryStatus("No se pudo enviar la solicitud. Intenta nuevamente.", "error");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function processRecoveryTokenFromUrl() {
+  const url = new URL(window.location.href);
+  const token = url.searchParams.get("recovery");
+  if (!token) return;
+
+  url.searchParams.delete("recovery");
+  window.history.replaceState({}, "", url);
+
+  try {
+    const response = await fetch(`/api/recovery/resolve/${encodeURIComponent(token)}`);
+    if (!response.ok) {
+      setRecoveryStatus("El link de recuperacion expiro o ya fue usado.", "error");
+      return;
+    }
+    const payload = await response.json();
+    if (!payload?.ok || !Array.isArray(payload.meetings)) {
+      setRecoveryStatus("El link de recuperacion no es valido.", "error");
+      return;
+    }
+    mergeMeetingsIntoStorage(payload.meetings);
+    setRecoveryStatus(`${payload.meetings.length} reunion(es) restauradas en este dispositivo.`, "ok");
+    await hydrateMyMeetingsPanel();
+  } catch (error) {
+    console.error(error);
+    setRecoveryStatus("Error procesando el link de recuperacion.", "error");
+  }
+}
+
 function setStatus(message, type = "info") {
   const el = document.getElementById("status");
   el.dataset.state = type;
@@ -230,6 +496,16 @@ function applyUserData(user) {
   localSchedule = parseSchedule(user.localSchedule);
   localStorage.setItem(getParticipantStorageKey(user.meetingUid), user.uid);
   setLoggedIn({ uid: user.uid, nick: user.nick, meetingUid: user.meetingUid });
+  if (currentMeeting?.uid === user.meetingUid) {
+    rememberMeeting({
+      meetingUid: user.meetingUid,
+      participantUid: user.uid,
+      nick: user.nick,
+      title: currentMeeting.title,
+      scheduledAtUTC: currentMeeting.scheduledAtUTC ?? null,
+      createdAtUTC: currentMeeting.createdAtUTC ?? null,
+    });
+  }
   updateUI();
 }
 
@@ -474,12 +750,24 @@ function toggleHour(day, hour) {
   updateUI();
 }
 
+function readScheduledAtInput() {
+  const input = document.getElementById("meeting-scheduled-at");
+  if (!input) return null;
+  const raw = input.value.trim();
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+}
+
 async function createMeeting() {
   const title = document.getElementById("meeting-title").value.trim();
   if (!title) {
     setStatus("Escribe un titulo para crear la reunion", "error");
     return;
   }
+
+  const scheduledAtUTC = readScheduledAtInput();
 
   const button = document.getElementById("btn-create-meeting");
   button.disabled = true;
@@ -489,7 +777,7 @@ async function createMeeting() {
     const response = await fetch("/api/meetings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, scheduledAtUTC }),
     });
     const payload = await response.json();
 
@@ -616,6 +904,13 @@ async function signIn() {
     return;
   }
 
+  const recoveryInput = document.getElementById("participant-recovery-email");
+  const recoveryEmail = recoveryInput?.value.trim().toLowerCase() || "";
+  if (recoveryEmail && !EMAIL_REGEX.test(recoveryEmail)) {
+    setStatus("El email de recuperacion es invalido", "error");
+    return;
+  }
+
   const button = document.getElementById("btn-signin");
   button.disabled = true;
   setStatus("Entrando a la reunion...", "loading");
@@ -625,6 +920,20 @@ async function signIn() {
     const lookupData = await lookup.json();
 
     if (lookup.ok && lookupData.exists) {
+      if (recoveryEmail) {
+        await fetch(`/api/meetings/${encodeURIComponent(currentMeeting.uid)}/participants`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            uid: lookupData.participant.uid,
+            nick: lookupData.participant.nick,
+            localSchedule: parseSchedule(lookupData.participant.localSchedule),
+            utcSchedule: parseSchedule(lookupData.participant.utcSchedule),
+            timezone: lookupData.participant.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+            recoveryEmail,
+          }),
+        }).catch((err) => console.error("No se pudo actualizar recovery_email", err));
+      }
       applyUserData(lookupData.participant);
       setStatus(`Bienvenido de vuelta, ${nick}`, "ok");
       return;
@@ -640,6 +949,7 @@ async function signIn() {
         localSchedule: [],
         utcSchedule: [],
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+        recoveryEmail: recoveryEmail || undefined,
       }),
     });
     const savePayload = await saveResponse.json();
@@ -668,6 +978,14 @@ async function saveUser() {
   button.disabled = true;
   setStatus("Guardando horario...", "loading");
 
+  const recoveryInput = document.getElementById("participant-recovery-email");
+  const recoveryEmail = recoveryInput?.value.trim().toLowerCase() || "";
+  if (recoveryEmail && !EMAIL_REGEX.test(recoveryEmail)) {
+    setStatus("El email de recuperacion es invalido", "error");
+    button.disabled = false;
+    return;
+  }
+
   try {
     const response = await fetch(`/api/meetings/${encodeURIComponent(currentMeeting.uid)}/participants`, {
       method: "POST",
@@ -678,6 +996,7 @@ async function saveUser() {
         localSchedule,
         utcSchedule: getCurrentUtcSchedule(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+        recoveryEmail: recoveryEmail || undefined,
       }),
     });
     const payload = await response.json();
@@ -736,16 +1055,20 @@ function startAutoRefresh() {
   }, 15000);
 }
 
-function init() {
+async function init() {
   renderGrid("grid-local", "L");
   renderGrid("grid-utc", "U");
   setMeetingState(null);
   updateUI();
 
+  await processRecoveryTokenFromUrl();
+  await hydrateMyMeetingsPanel();
+
   const meetingUid = getMeetingUidFromUrl();
   if (meetingUid) {
     setStatus("Cargando horarios de la reunion...", "loading");
-    loadMeeting(meetingUid, { restoreSession: true });
+    await loadMeeting(meetingUid, { restoreSession: true });
+    hydrateMyMeetingsPanel();
   }
 }
 
@@ -753,5 +1076,7 @@ window.createMeeting = createMeeting;
 window.copyMeetingLink = copyMeetingLink;
 window.signIn = signIn;
 window.saveUser = saveUser;
+window.requestRecovery = requestRecovery;
+window.forgetAllMeetings = forgetAllMeetings;
 
 init();

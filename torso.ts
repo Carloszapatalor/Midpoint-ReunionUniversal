@@ -26,12 +26,19 @@ type MeetingParticipantRecord = {
   updatedAtLocal: string;
   updatedAtUTC: string;
   timezone: string;
+  recoveryEmail: string | null;
 };
 
 type MeetingRecord = {
   uid: string;
   title: string;
   createdAtUTC: string;
+  scheduledAtUTC: string | null;
+};
+
+type EnrichedMeetingRecord = MeetingRecord & {
+  participantUid: string;
+  nick: string;
 };
 
 function unwrapTursoPayload(payload: unknown) {
@@ -88,6 +95,22 @@ function rowsToObjects(result: TursoRowResult | null): Array<Record<string, unkn
   });
 }
 
+function normalizeEmail(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+async function tryExecuteStatement(statement: TursoStatement, ignoreSubstrings: string[]) {
+  try {
+    await executeStatements([statement]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message.toLowerCase() : "";
+    if (ignoreSubstrings.some((needle) => message.includes(needle.toLowerCase()))) {
+      return;
+    }
+    throw error;
+  }
+}
+
 async function executeStatements(statements: TursoStatement[]) {
   if (!TURSO_URL || !TURSO_AUTH_TOKEN) {
     throw new Error("Variables de entorno de Turso no configuradas");
@@ -126,57 +149,99 @@ async function ensureSchema() {
     return schemaPromise;
   }
 
-  schemaPromise = executeStatements([
-    {
-      q: `
-        CREATE TABLE IF NOT EXISTS meetings (
-          uid TEXT PRIMARY KEY,
-          title TEXT NOT NULL,
-          created_at_utc TEXT NOT NULL
-        )
-      `,
-    },
-    {
-      q: `
-        CREATE TABLE IF NOT EXISTS meeting_participants (
-          uid TEXT PRIMARY KEY,
-          meeting_uid TEXT NOT NULL,
-          nick TEXT NOT NULL,
-          local_schedule TEXT NOT NULL DEFAULT '[]',
-          utc_schedule TEXT NOT NULL DEFAULT '[]',
-          timezone TEXT NOT NULL,
-          updated_at_local TEXT NOT NULL,
-          updated_at_utc TEXT NOT NULL,
-          FOREIGN KEY (meeting_uid) REFERENCES meetings(uid)
-        )
-      `,
-    },
-    {
-      q: `
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_meeting_participants_meeting_nick
-        ON meeting_participants (meeting_uid, nick)
-      `,
-    },
-    {
-      q: `
-        CREATE INDEX IF NOT EXISTS idx_meeting_participants_meeting_uid
-        ON meeting_participants (meeting_uid)
-      `,
-    },
-  ]).then(() => undefined);
+  schemaPromise = (async () => {
+    await executeStatements([
+      {
+        q: `
+          CREATE TABLE IF NOT EXISTS meetings (
+            uid TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            created_at_utc TEXT NOT NULL
+          )
+        `,
+      },
+      {
+        q: `
+          CREATE TABLE IF NOT EXISTS meeting_participants (
+            uid TEXT PRIMARY KEY,
+            meeting_uid TEXT NOT NULL,
+            nick TEXT NOT NULL,
+            local_schedule TEXT NOT NULL DEFAULT '[]',
+            utc_schedule TEXT NOT NULL DEFAULT '[]',
+            timezone TEXT NOT NULL,
+            updated_at_local TEXT NOT NULL,
+            updated_at_utc TEXT NOT NULL,
+            FOREIGN KEY (meeting_uid) REFERENCES meetings(uid)
+          )
+        `,
+      },
+      {
+        q: `
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_meeting_participants_meeting_nick
+          ON meeting_participants (meeting_uid, nick)
+        `,
+      },
+      {
+        q: `
+          CREATE INDEX IF NOT EXISTS idx_meeting_participants_meeting_uid
+          ON meeting_participants (meeting_uid)
+        `,
+      },
+      {
+        q: `
+          CREATE TABLE IF NOT EXISTS recovery_tokens (
+            token TEXT PRIMARY KEY,
+            email TEXT NOT NULL,
+            created_at_utc TEXT NOT NULL,
+            expires_at_utc TEXT NOT NULL,
+            used_at_utc TEXT NULL
+          )
+        `,
+      },
+      {
+        q: `
+          CREATE INDEX IF NOT EXISTS idx_recovery_tokens_email
+          ON recovery_tokens (email)
+        `,
+      },
+    ]);
+
+    // Idempotent ALTERs: Turso/SQLite no soportan "ADD COLUMN IF NOT EXISTS",
+    // asi que ignoramos el error de columna duplicada cuando ya existe.
+    await tryExecuteStatement(
+      { q: "ALTER TABLE meetings ADD COLUMN scheduled_at_utc TEXT NULL" },
+      ["duplicate column name", "already exists"],
+    );
+    await tryExecuteStatement(
+      { q: "ALTER TABLE meeting_participants ADD COLUMN recovery_email TEXT NULL" },
+      ["duplicate column name", "already exists"],
+    );
+
+    await executeStatements([
+      {
+        q: `
+          CREATE INDEX IF NOT EXISTS idx_meeting_participants_recovery_email
+          ON meeting_participants (recovery_email)
+        `,
+      },
+    ]);
+  })();
 
   return schemaPromise;
 }
 
 function mapMeeting(record: Record<string, unknown>): MeetingRecord {
+  const rawScheduled = record.scheduled_at_utc;
   return {
     uid: String(record.uid || ""),
     title: String(record.title || ""),
     createdAtUTC: String(record.created_at_utc || ""),
+    scheduledAtUTC: rawScheduled == null || rawScheduled === "" ? null : String(rawScheduled),
   };
 }
 
 function mapParticipant(record: Record<string, unknown>): MeetingParticipantRecord {
+  const rawEmail = record.recovery_email;
   return {
     uid: String(record.uid || ""),
     meetingUid: String(record.meeting_uid || ""),
@@ -186,6 +251,7 @@ function mapParticipant(record: Record<string, unknown>): MeetingParticipantReco
     updatedAtLocal: String(record.updated_at_local || ""),
     updatedAtUTC: String(record.updated_at_utc || ""),
     timezone: String(record.timezone || "UTC"),
+    recoveryEmail: rawEmail == null || rawEmail === "" ? null : String(rawEmail),
   };
 }
 
@@ -201,7 +267,7 @@ async function getMeetingRow(meetingUid: string) {
   return rows[0] || null;
 }
 
-export async function createMeetingTorso(title: string) {
+export async function createMeetingTorso(title: string, scheduledAtUTC?: string | null) {
   await ensureSchema();
 
   const cleanTitle = normalizeString(title);
@@ -209,19 +275,30 @@ export async function createMeetingTorso(title: string) {
     throw new Error("El titulo es requerido");
   }
 
+  const cleanScheduled = normalizeString(scheduledAtUTC);
+  let scheduledIso: string | null = null;
+  if (cleanScheduled) {
+    const parsed = new Date(cleanScheduled);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new Error("La fecha objetivo es invalida");
+    }
+    scheduledIso = parsed.toISOString();
+  }
+
   const meeting: MeetingRecord = {
     uid: crypto.randomUUID(),
     title: cleanTitle,
     createdAtUTC: new Date().toISOString(),
+    scheduledAtUTC: scheduledIso,
   };
 
   await executeStatements([
     {
       q: `
-        INSERT INTO meetings (uid, title, created_at_utc)
-        VALUES (?, ?, ?)
+        INSERT INTO meetings (uid, title, created_at_utc, scheduled_at_utc)
+        VALUES (?, ?, ?, ?)
       `,
-      params: [meeting.uid, meeting.title, meeting.createdAtUTC],
+      params: [meeting.uid, meeting.title, meeting.createdAtUTC, meeting.scheduledAtUTC],
     },
   ]);
 
@@ -327,6 +404,7 @@ export async function saveMeetingParticipantTorso(
     updatedAtLocal: string;
     updatedAtUTC: string;
     timezone?: string;
+    recoveryEmail?: string | null;
   },
 ) {
   await ensureSchema();
@@ -360,6 +438,18 @@ export async function saveMeetingParticipantTorso(
     throw new Error(`Nick "${cleanNick}" ya esta en uso en esta reunion`);
   }
 
+  const rawEmail = data.recoveryEmail === undefined ? undefined : normalizeEmail(data.recoveryEmail);
+  let recoveryEmail: string | null = null;
+  if (rawEmail !== undefined) {
+    if (rawEmail === "") {
+      recoveryEmail = null;
+    } else if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(rawEmail)) {
+      throw new Error("El email de recuperacion es invalido");
+    } else {
+      recoveryEmail = rawEmail;
+    }
+  }
+
   const participant: MeetingParticipantRecord = {
     uid: cleanUid,
     meetingUid: cleanMeetingUid,
@@ -369,6 +459,7 @@ export async function saveMeetingParticipantTorso(
     updatedAtLocal: String(data.updatedAtLocal || new Date().toString()),
     updatedAtUTC: String(data.updatedAtUTC || new Date().toISOString()),
     timezone: normalizeString(data.timezone) || "UTC",
+    recoveryEmail,
   };
 
   await executeStatements([
@@ -382,9 +473,10 @@ export async function saveMeetingParticipantTorso(
           utc_schedule,
           timezone,
           updated_at_local,
-          updated_at_utc
+          updated_at_utc,
+          recovery_email
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(uid) DO UPDATE SET
           meeting_uid = excluded.meeting_uid,
           nick = excluded.nick,
@@ -392,7 +484,8 @@ export async function saveMeetingParticipantTorso(
           utc_schedule = excluded.utc_schedule,
           timezone = excluded.timezone,
           updated_at_local = excluded.updated_at_local,
-          updated_at_utc = excluded.updated_at_utc
+          updated_at_utc = excluded.updated_at_utc,
+          recovery_email = COALESCE(excluded.recovery_email, meeting_participants.recovery_email)
       `,
       params: [
         participant.uid,
@@ -403,9 +496,150 @@ export async function saveMeetingParticipantTorso(
         participant.timezone,
         participant.updatedAtLocal,
         participant.updatedAtUTC,
+        participant.recoveryEmail,
       ],
     },
   ]);
 
   return participant;
+}
+
+function mapEnrichedMeeting(record: Record<string, unknown>): EnrichedMeetingRecord {
+  const base = mapMeeting(record);
+  return {
+    ...base,
+    participantUid: String(record.participant_uid || ""),
+    nick: String(record.nick || ""),
+  };
+}
+
+export async function listMeetingsByParticipantUidsTorso(uids: string[]) {
+  await ensureSchema();
+
+  const cleanUids = Array.from(
+    new Set(
+      (Array.isArray(uids) ? uids : [])
+        .map((item) => normalizeString(item))
+        .filter((item) => item.length > 0),
+    ),
+  );
+  if (!cleanUids.length) return [] as EnrichedMeetingRecord[];
+
+  const placeholders = cleanUids.map(() => "?").join(", ");
+  const payload = await executeStatements([
+    {
+      q: `
+        SELECT
+          m.uid AS uid,
+          m.title AS title,
+          m.created_at_utc AS created_at_utc,
+          m.scheduled_at_utc AS scheduled_at_utc,
+          p.uid AS participant_uid,
+          p.nick AS nick
+        FROM meeting_participants p
+        INNER JOIN meetings m ON m.uid = p.meeting_uid
+        WHERE p.uid IN (${placeholders})
+        ORDER BY
+          CASE WHEN m.scheduled_at_utc IS NULL THEN 1 ELSE 0 END,
+          m.scheduled_at_utc ASC,
+          m.created_at_utc DESC
+      `,
+      params: cleanUids,
+    },
+  ]);
+
+  return rowsToObjects(getFirstResult(payload)).map(mapEnrichedMeeting);
+}
+
+export async function listMeetingsByRecoveryEmailTorso(email: string) {
+  await ensureSchema();
+
+  const cleanEmail = normalizeEmail(email);
+  if (!cleanEmail) return [] as EnrichedMeetingRecord[];
+
+  const payload = await executeStatements([
+    {
+      q: `
+        SELECT
+          m.uid AS uid,
+          m.title AS title,
+          m.created_at_utc AS created_at_utc,
+          m.scheduled_at_utc AS scheduled_at_utc,
+          p.uid AS participant_uid,
+          p.nick AS nick
+        FROM meeting_participants p
+        INNER JOIN meetings m ON m.uid = p.meeting_uid
+        WHERE p.recovery_email = ?
+        ORDER BY
+          CASE WHEN m.scheduled_at_utc IS NULL THEN 1 ELSE 0 END,
+          m.scheduled_at_utc ASC,
+          m.created_at_utc DESC
+      `,
+      params: [cleanEmail],
+    },
+  ]);
+
+  return rowsToObjects(getFirstResult(payload)).map(mapEnrichedMeeting);
+}
+
+export async function createRecoveryTokenTorso(email: string, ttlMinutes = 30) {
+  await ensureSchema();
+
+  const cleanEmail = normalizeEmail(email);
+  if (!cleanEmail) {
+    throw new Error("Email requerido");
+  }
+
+  const token = crypto.randomUUID();
+  const now = new Date();
+  const expires = new Date(now.getTime() + ttlMinutes * 60 * 1000);
+
+  await executeStatements([
+    {
+      q: `
+        INSERT INTO recovery_tokens (token, email, created_at_utc, expires_at_utc)
+        VALUES (?, ?, ?, ?)
+      `,
+      params: [token, cleanEmail, now.toISOString(), expires.toISOString()],
+    },
+  ]);
+
+  return { token, email: cleanEmail, expiresAtUTC: expires.toISOString() };
+}
+
+export async function consumeRecoveryTokenTorso(token: string): Promise<string | null> {
+  await ensureSchema();
+
+  const cleanToken = normalizeString(token);
+  if (!cleanToken) return null;
+
+  const lookup = await executeStatements([
+    {
+      q: `
+        SELECT email, expires_at_utc, used_at_utc
+        FROM recovery_tokens
+        WHERE token = ?
+        LIMIT 1
+      `,
+      params: [cleanToken],
+    },
+  ]);
+
+  const rows = rowsToObjects(getFirstResult(lookup));
+  if (!rows.length) return null;
+
+  const row = rows[0];
+  if (row.used_at_utc) return null;
+
+  const expiresAt = Date.parse(String(row.expires_at_utc || ""));
+  if (!Number.isFinite(expiresAt) || expiresAt < Date.now()) return null;
+
+  await executeStatements([
+    {
+      q: "UPDATE recovery_tokens SET used_at_utc = ? WHERE token = ?",
+      params: [new Date().toISOString(), cleanToken],
+    },
+  ]);
+
+  return normalizeEmail(row.email);
 }

@@ -10,6 +10,37 @@
 
 <body class="page-shell text-stone-100">
   <div class="page-wrap">
+    <section id="my-meetings-panel" class="panel hidden">
+      <div class="panel-header">
+        <div>
+          <p class="panel-kicker">Tu historial</p>
+          <h2>Mis reuniones</h2>
+        </div>
+        <button id="btn-forget-meetings" onclick="forgetAllMeetings()" class="action-btn action-btn-ghost">
+          Olvidar este dispositivo
+        </button>
+      </div>
+      <div id="my-meetings-upcoming" class="meeting-cards"></div>
+      <div id="my-meetings-past" class="meeting-cards meeting-cards-past"></div>
+    </section>
+
+    <section id="recovery-panel" class="panel">
+      <div>
+        <p class="panel-kicker">Recuperacion</p>
+        <h2>Perdi mis reuniones</h2>
+      </div>
+      <p class="panel-note">
+        Si agregaste un email de recuperacion al unirte, te enviamos un link para restaurar tu historial en este navegador.
+      </p>
+      <div class="auth-row">
+        <input id="recovery-email" type="email" placeholder="tu@email.com" class="field-input">
+        <button id="btn-recovery-request" onclick="requestRecovery()" class="action-btn action-btn-secondary">
+          Enviarme mis reuniones
+        </button>
+      </div>
+      <p id="recovery-status" class="status-line"></p>
+    </section>
+
     <section class="hero-panel">
       <p class="eyebrow">Agenda compartida</p>
       <h1>Coordina una reunion por link</h1>
@@ -25,12 +56,19 @@
           placeholder="Titulo de la reunion"
           class="field-input field-input-lg"
         >
+        <input
+          id="meeting-scheduled-at"
+          type="datetime-local"
+          class="field-input field-input-lg"
+          title="Fecha objetivo (opcional)"
+        >
         <button id="btn-create-meeting" onclick="createMeeting()" class="action-btn action-btn-primary">
           Crear reunion
         </button>
       </div>
 
       <p id="meeting-hint" class="hero-hint">
+        La fecha objetivo es opcional y permite separar reuniones proximas de las ya pasadas.
         Si ya tienes un link, abre la reunion con el parametro <strong>?meeting=UID</strong>.
       </p>
     </section>
@@ -57,6 +95,7 @@
     <section class="panel auth-panel">
       <div class="auth-row">
         <input id="nick" placeholder="Tu nick" class="field-input">
+        <input id="participant-recovery-email" type="email" placeholder="Email de recuperacion (opcional)" class="field-input">
         <button id="btn-signin" onclick="signIn()" class="action-btn action-btn-secondary">
           Entrar
         </button>

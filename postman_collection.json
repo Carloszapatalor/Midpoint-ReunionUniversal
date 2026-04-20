@@ -1,0 +1,267 @@
+{
+  "info": {
+    "name": "Reunion Universal API",
+    "description": "Coleccion completa de endpoints del servidor Hono + Turso. Variables: baseUrl, meetingUid, participantUid, nick, recoveryEmail, recoveryToken.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "meetingUid",
+      "value": "",
+      "type": "string",
+      "description": "Se autollena tras POST /api/meetings"
+    },
+    {
+      "key": "participantUid",
+      "value": "",
+      "type": "string",
+      "description": "Se autollena tras POST /api/meetings/{uid}/participants"
+    },
+    {
+      "key": "nick",
+      "value": "alexis",
+      "type": "string"
+    },
+    {
+      "key": "recoveryEmail",
+      "value": "alexis+test@example.com",
+      "type": "string"
+    },
+    {
+      "key": "recoveryToken",
+      "value": "",
+      "type": "string",
+      "description": "Cuando RESEND_API_KEY no esta configurado, el token aparece en el log del servidor"
+    }
+  ],
+  "item": [
+    {
+      "name": "Meetings",
+      "item": [
+        {
+          "name": "Crear reunion (sin fecha)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Sprint planning\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/meetings",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "meetings"]
+            },
+            "description": "Crea una reunion sin fecha objetivo. Devuelve 201 con el MeetingRecord."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json?.meeting?.uid) {",
+                  "  pm.collectionVariables.set('meetingUid', json.meeting.uid);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Crear reunion (con fecha objetivo)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Demo con fecha\",\n  \"scheduledAtUTC\": \"2099-01-15T15:00:00Z\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/meetings",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "meetings"]
+            },
+            "description": "scheduledAtUTC es opcional; debe ser ISO-8601. Si es invalida devuelve 400."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json?.meeting?.uid) {",
+                  "  pm.collectionVariables.set('meetingUid', json.meeting.uid);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Obtener reunion + participantes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/meetings/{{meetingUid}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "meetings", "{{meetingUid}}"]
+            },
+            "description": "Devuelve { exists: true, meeting: { ...MeetingRecord, participants: [...] } } o 404 con { exists: false }."
+          }
+        },
+        {
+          "name": "Listar mis reuniones por participantUids",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"participantUids\": [\"{{participantUid}}\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/meetings/mine",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "meetings", "mine"]
+            },
+            "description": "Devuelve los meetings donde existe al menos un participante con uno de esos uids. Ordenado por scheduled_at_utc (nulls al final) luego created_at_utc DESC."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Participantes",
+      "item": [
+        {
+          "name": "Crear / actualizar participante",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"uid\": \"{{participantUid}}\",\n  \"nick\": \"{{nick}}\",\n  \"localSchedule\": [\"0-9\", \"1-14\"],\n  \"utcSchedule\": [\"0-15\", \"1-20\"],\n  \"timezone\": \"America/Mexico_City\",\n  \"recoveryEmail\": \"{{recoveryEmail}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/meetings/{{meetingUid}}/participants",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "meetings", "{{meetingUid}}", "participants"]
+            },
+            "description": "Upsert por uid. 409 si el nick ya existe en la reunion. 404 si la reunion no existe. recoveryEmail es opcional; omitelo del body para no tocarlo."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('participantUid')) {",
+                  "  const uid = (typeof crypto !== 'undefined' && crypto.randomUUID)",
+                  "    ? crypto.randomUUID()",
+                  "    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {",
+                  "        const r = Math.random() * 16 | 0;",
+                  "        const v = c === 'x' ? r : (r & 0x3) | 0x8;",
+                  "        return v.toString(16);",
+                  "      });",
+                  "  pm.collectionVariables.set('participantUid', uid);",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json?.participant?.uid) {",
+                  "  pm.collectionVariables.set('participantUid', json.participant.uid);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Buscar participante por uid",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/meetings/{{meetingUid}}/participants/uid/{{participantUid}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "meetings", "{{meetingUid}}", "participants", "uid", "{{participantUid}}"]
+            },
+            "description": "Usado por el cliente para restaurar sesion desde localStorage. 404 con { exists: false } si no existe."
+          }
+        },
+        {
+          "name": "Buscar participante por nick",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/meetings/{{meetingUid}}/participants/nick/{{nick}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "meetings", "{{meetingUid}}", "participants", "nick", "{{nick}}"]
+            },
+            "description": "Lookup al hacer signIn. Si no existe devuelve 404 con { exists: false } y el cliente crea el participante."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Recuperacion por email",
+      "item": [
+        {
+          "name": "Solicitar link de recuperacion",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{recoveryEmail}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/recovery/request",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "recovery", "request"]
+            },
+            "description": "Siempre responde 200 si el email tiene formato valido (evita enumeracion). 400 si el email es invalido. Si RESEND_API_KEY no esta configurado, el link se loguea en consola."
+          }
+        },
+        {
+          "name": "Resolver token de recuperacion",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/recovery/resolve/{{recoveryToken}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "recovery", "resolve", "{{recoveryToken}}"]
+            },
+            "description": "Un solo uso. Devuelve 200 con { ok: true, meetings: [...] } la primera vez. 404 con { ok: false } si esta expirado, usado o no existe."
+          }
+        }
+      ]
+    }
+  ]
+}
