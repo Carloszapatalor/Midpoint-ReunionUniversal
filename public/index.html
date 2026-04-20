@@ -3,58 +3,101 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>EvilZeth App</title>
-
-  <!-- Tailwind -->
+  <title>Agenda de reuniones</title>
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- CSS separado -->
   <link rel="stylesheet" href="/styles.css">
 </head>
 
-<body class="bg-slate-900 text-slate-200 p-4 font-sans">
+<body class="page-shell text-stone-100">
+  <div class="page-wrap">
+    <section class="hero-panel">
+      <p class="eyebrow">Agenda compartida</p>
+      <h1>Coordina una reunion por link</h1>
+      <p class="hero-copy">
+        Crea una reunion con titulo, comparte el enlace unico y deja que cada persona marque su horario local.
+        La vista UTC junta a todos para detectar el mejor punto medio.
+      </p>
 
-<div class="max-w-6xl mx-auto text-center">
+      <div class="hero-actions">
+        <input
+          id="meeting-title"
+          type="text"
+          placeholder="Titulo de la reunion"
+          class="field-input field-input-lg"
+        >
+        <button id="btn-create-meeting" onclick="createMeeting()" class="action-btn action-btn-primary">
+          Crear reunion
+        </button>
+      </div>
 
-  <h1 class="text-xl font-bold text-blue-400 mb-2">
-    Horarios
-  </h1>
+      <p id="meeting-hint" class="hero-hint">
+        Si ya tienes un link, abre la reunion con el parametro <strong>?meeting=UID</strong>.
+      </p>
+    </section>
 
-  <div class="flex items-center justify-center gap-2">
-    <input id="nick" placeholder="Nick"
-      class="bg-slate-800 border border-slate-700 px-3 py-1 text-sm rounded outline-none focus:ring-1 focus:ring-blue-500">
-    <button id="btn-signin" onclick="signIn()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded text-sm">
-      Iniciar Sesión
-    </button>
+    <section id="meeting-details" class="panel hidden">
+      <div class="meeting-head">
+        <div>
+          <p class="panel-kicker">Reunion activa</p>
+          <h2 id="meeting-name">Sin reunion</h2>
+        </div>
+        <div class="meeting-chip" id="meeting-code">UID pendiente</div>
+      </div>
+
+      <div class="meeting-share-row">
+        <input id="meeting-link" class="field-input" readonly>
+        <button id="btn-copy-link" onclick="copyMeetingLink()" class="action-btn action-btn-secondary" disabled>
+          Copiar link
+        </button>
+      </div>
+
+      <p id="meeting-stats" class="meeting-stats">Crea una reunion para comenzar.</p>
+    </section>
+
+    <section class="panel auth-panel">
+      <div class="auth-row">
+        <input id="nick" placeholder="Tu nick" class="field-input">
+        <button id="btn-signin" onclick="signIn()" class="action-btn action-btn-secondary">
+          Entrar
+        </button>
+        <button id="btn-save" onclick="saveUser()" disabled class="action-btn action-btn-success">
+          Guardar horario
+        </button>
+      </div>
+      <p id="status" class="status-line"></p>
+    </section>
+
+    <section class="grid-layout">
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">Tu horario</p>
+            <h2>Vista local</h2>
+          </div>
+          <p class="panel-note">Marca los bloques donde puedes asistir.</p>
+        </div>
+        <div id="grid-local"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">Cruce global</p>
+            <h2>Vista UTC</h2>
+          </div>
+          <p class="panel-note">Cada celda muestra cuantas personas coinciden en esa hora.</p>
+        </div>
+
+        <div id="utc-summary" class="summary-box">
+          Esperando participantes.
+        </div>
+
+        <div id="participant-list" class="participant-list"></div>
+        <div id="grid-utc"></div>
+      </div>
+    </section>
   </div>
 
-  <p id="status" class="text-xs mt-2 h-4 text-slate-400"></p>
-
-  <div class="mt-3">
-    <button id="btn-save" onclick="saveUser()" disabled
-      class="bg-green-600 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-1 rounded text-sm">
-      Guardar
-    </button>
-  </div>
-
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-
-    <div class="panel">
-      <h2>Horario Local</h2>
-      <div id="grid-local"></div>
-    </div>
-
-    <div class="panel">
-      <h2>Horario UTC</h2>
-      <div id="grid-utc" class="pointer-events-none"></div>
-    </div>
-
-  </div>
-
-</div>
-
-<!-- JS separado -->
-<script src="/app.js"></script>
-
+  <script src="/app.js"></script>
 </body>
 </html>
