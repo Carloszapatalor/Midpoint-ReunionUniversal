@@ -7,96 +7,162 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/styles.css">
 </head>
-
 <body class="page-shell text-stone-100">
-  <div class="page-wrap">
-    <section class="hero-panel">
-      <p class="eyebrow">Agenda compartida</p>
-      <h1>Coordina una reunion por link</h1>
-      <p class="hero-copy">
-        Crea una reunion con titulo, comparte el enlace unico y deja que cada persona marque su horario local.
-        La vista UTC junta a todos para detectar el mejor punto medio.
-      </p>
-
-      <div class="hero-actions">
-        <input
-          id="meeting-title"
-          type="text"
-          placeholder="Titulo de la reunion"
-          class="field-input field-input-lg"
-        >
-        <button id="btn-create-meeting" onclick="createMeeting()" class="action-btn action-btn-primary">
-          Crear reunion
+  <header class="topbar-shell">
+    <div class="topbar page-wrap page-wrap-tight">
+      <a href="/" class="brand-mark">Agenda</a>
+      <div class="topbar-actions">
+        <button id="nav-dashboard-btn" type="button" class="action-btn action-btn-secondary" onclick="goToDashboard()">
+          Login / Crear reunion
         </button>
       </div>
+    </div>
+  </header>
 
-      <p id="meeting-hint" class="hero-hint">
-        Si ya tienes un link, abre la reunion con el parametro <strong>?meeting=UID</strong>.
-      </p>
-    </section>
+  <main class="page-wrap page-main">
+    <section id="dashboard-view" class="view-stack hidden">
+      <section class="hero-panel">
+        <p class="eyebrow">Panel privado</p>
+        <h1 id="dashboard-title">Inicia sesion para crear reuniones</h1>
+        <p id="dashboard-copy" class="hero-copy">
+          Crea tu usuario con nick y contrasena para administrar reuniones propias. Los invitados siguen entrando solo con el link y su nick.
+        </p>
+      </section>
 
-    <section id="meeting-details" class="panel hidden">
-      <div class="meeting-head">
-        <div>
-          <p class="panel-kicker">Reunion activa</p>
-          <h2 id="meeting-name">Sin reunion</h2>
-        </div>
-        <div class="meeting-chip" id="meeting-code">UID pendiente</div>
-      </div>
-
-      <div class="meeting-share-row">
-        <input id="meeting-link" class="field-input" readonly>
-        <button id="btn-copy-link" onclick="copyMeetingLink()" class="action-btn action-btn-secondary" disabled>
-          Copiar link
-        </button>
-      </div>
-
-      <p id="meeting-stats" class="meeting-stats">Crea una reunion para comenzar.</p>
-    </section>
-
-    <section class="panel auth-panel">
-      <div class="auth-row">
-        <input id="nick" placeholder="Tu nick" class="field-input">
-        <button id="btn-signin" onclick="signIn()" class="action-btn action-btn-secondary">
-          Entrar
-        </button>
-        <button id="btn-save" onclick="saveUser()" disabled class="action-btn action-btn-success">
-          Guardar horario
-        </button>
-      </div>
-      <p id="status" class="status-line"></p>
-    </section>
-
-    <section class="grid-layout">
-      <div class="panel">
-        <div class="panel-header">
+      <section id="auth-card" class="panel auth-panel auth-panel-vertical">
+        <div class="panel-header panel-header-compact">
           <div>
-            <p class="panel-kicker">Tu horario</p>
-            <h2>Vista local</h2>
+            <p class="panel-kicker">Acceso</p>
+            <h2>Login</h2>
           </div>
-          <p class="panel-note">Marca los bloques donde puedes asistir.</p>
+          <p class="panel-note">Tu cuenta sirve para crear reuniones y verlas en tu panel.</p>
         </div>
-        <div id="grid-local"></div>
-      </div>
 
-      <div class="panel">
-        <div class="panel-header">
+        <div class="auth-form-grid">
+          <input id="auth-username" type="text" placeholder="Usuario" class="field-input">
+          <input id="auth-password" type="password" placeholder="Contrasena" class="field-input">
+        </div>
+
+        <div class="auth-row auth-row-wrap">
+          <button id="btn-login" type="button" class="action-btn action-btn-primary" onclick="loginUser()">
+            Iniciar sesion
+          </button>
+          <button id="btn-register" type="button" class="action-btn action-btn-secondary" onclick="registerUser()">
+            Crear usuario
+          </button>
+        </div>
+
+        <p id="auth-status" class="status-line"></p>
+      </section>
+
+      <section id="dashboard-card" class="panel hidden">
+        <div class="panel-header dashboard-header">
           <div>
-            <p class="panel-kicker">Cruce global</p>
-            <h2>Vista UTC</h2>
+            <p class="panel-kicker">Tu espacio</p>
+            <h2 id="dashboard-username">Usuario</h2>
           </div>
-          <p class="panel-note">Cada celda muestra cuantas personas coinciden en esa hora.</p>
+          <button id="btn-logout" type="button" class="action-btn action-btn-secondary" onclick="logoutUser()">
+            Cerrar sesion
+          </button>
         </div>
 
-        <div id="utc-summary" class="summary-box">
-          Esperando participantes.
+        <div class="creator-panel">
+          <input id="dashboard-meeting-title" type="text" placeholder="Titulo de la reunion" class="field-input field-input-lg">
+          <button id="btn-dashboard-create" type="button" class="action-btn action-btn-success" onclick="createOwnedMeeting()">
+            Crear reunion
+          </button>
         </div>
 
-        <div id="participant-list" class="participant-list"></div>
-        <div id="grid-utc"></div>
-      </div>
+        <p id="dashboard-status" class="status-line"></p>
+
+        <div class="meeting-list-head">
+          <div>
+            <p class="panel-kicker">Tus reuniones</p>
+            <h3>Panel de reuniones creadas</h3>
+          </div>
+        </div>
+
+        <div id="owned-meeting-list" class="meeting-list"></div>
+      </section>
     </section>
-  </div>
+
+    <section id="meeting-view" class="view-stack hidden">
+      <section class="hero-panel meeting-hero">
+        <p class="eyebrow">Reunion publica</p>
+        <h1 id="meeting-hero-title">Coordina una reunion por link</h1>
+        <p class="hero-copy">
+          Cualquier persona con el link puede ver la disponibilidad global en UTC. Solo necesita escribir un nick para proponer su propio horario.
+        </p>
+      </section>
+
+      <section id="meeting-details" class="panel hidden">
+        <div class="meeting-head">
+          <div>
+            <p class="panel-kicker">Reunion activa</p>
+            <h2 id="meeting-name">Sin reunion</h2>
+          </div>
+          <div class="meeting-chip" id="meeting-code">UID pendiente</div>
+        </div>
+
+        <div class="meeting-share-row">
+          <input id="meeting-link" class="field-input" readonly>
+          <button id="btn-copy-link" onclick="copyMeetingLink()" class="action-btn action-btn-secondary" disabled>
+            Copiar link
+          </button>
+        </div>
+
+        <p id="meeting-stats" class="meeting-stats">Abre una reunion para comenzar.</p>
+      </section>
+
+      <section class="panel auth-panel">
+        <div class="panel-header panel-header-compact">
+          <div>
+            <p class="panel-kicker">Participar</p>
+            <h2>Nick temporal</h2>
+          </div>
+          <p class="panel-note">No necesitas registrarte para proponer horario en esta reunion.</p>
+        </div>
+
+        <div class="auth-row auth-row-wrap">
+          <input id="nick" placeholder="Tu nick" class="field-input">
+          <button id="btn-signin" onclick="signInParticipant()" class="action-btn action-btn-secondary">
+            Entrar
+          </button>
+          <button id="btn-save" onclick="saveParticipantSchedule()" disabled class="action-btn action-btn-success">
+            Guardar horario
+          </button>
+        </div>
+        <p id="meeting-status" class="status-line"></p>
+      </section>
+
+      <section class="grid-layout">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Tu horario</p>
+              <h2>Vista local</h2>
+            </div>
+            <p class="panel-note">Marca los bloques donde puedes asistir.</p>
+          </div>
+          <div id="grid-local"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Cruce global</p>
+              <h2>Vista UTC</h2>
+            </div>
+            <p class="panel-note">El color verde indica acumulacion de personas disponibles.</p>
+          </div>
+
+          <div id="utc-summary" class="summary-box">Esperando participantes.</div>
+          <div id="participant-list" class="participant-list"></div>
+          <div id="grid-utc"></div>
+        </div>
+      </section>
+    </section>
+  </main>
 
   <script src="/app.js"></script>
 </body>

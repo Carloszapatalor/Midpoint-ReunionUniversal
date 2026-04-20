@@ -17,6 +17,15 @@ type TursoRootPayload = {
   results?: TursoRowResult[] | TursoRowResult;
 };
 
+type UserRecord = {
+  uid: string;
+  username: string;
+  passwordHash: string;
+  sessionToken: string | null;
+  createdAtUTC: string;
+  updatedAtUTC: string;
+};
+
 type MeetingParticipantRecord = {
   uid: string;
   meetingUid: string;
@@ -31,7 +40,12 @@ type MeetingParticipantRecord = {
 type MeetingRecord = {
   uid: string;
   title: string;
+  ownerUid: string;
   createdAtUTC: string;
+};
+
+type DashboardMeetingRecord = MeetingRecord & {
+  participantCount: number;
 };
 
 function unwrapTursoPayload(payload: unknown) {
@@ -119,6 +133,23 @@ async function executeStatements(statements: TursoStatement[]) {
   return unwrapTursoPayload(payload) as TursoRootPayload;
 }
 
+async function executeStatement(q: string, params: unknown[] = []) {
+  return executeStatements([{ q, params }]);
+}
+
+async function getTableColumns(tableName: "users" | "meetings" | "meeting_participants") {
+  const payload = await executeStatement(`PRAGMA table_info(${tableName})`);
+  const rows = rowsToObjects(getFirstResult(payload));
+  return new Set(rows.map((row) => String(row.name || "")));
+}
+
+async function ensureColumnExists(tableName: "users" | "meetings", columnName: string, definition: string) {
+  const columns = await getTableColumns(tableName);
+  if (!columns.has(columnName)) {
+    await executeStatement(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+}
+
 let schemaPromise: Promise<void> | null = null;
 
 async function ensureSchema() {
@@ -126,53 +157,86 @@ async function ensureSchema() {
     return schemaPromise;
   }
 
-  schemaPromise = executeStatements([
-    {
-      q: `
-        CREATE TABLE IF NOT EXISTS meetings (
-          uid TEXT PRIMARY KEY,
-          title TEXT NOT NULL,
-          created_at_utc TEXT NOT NULL
-        )
-      `,
-    },
-    {
-      q: `
-        CREATE TABLE IF NOT EXISTS meeting_participants (
-          uid TEXT PRIMARY KEY,
-          meeting_uid TEXT NOT NULL,
-          nick TEXT NOT NULL,
-          local_schedule TEXT NOT NULL DEFAULT '[]',
-          utc_schedule TEXT NOT NULL DEFAULT '[]',
-          timezone TEXT NOT NULL,
-          updated_at_local TEXT NOT NULL,
-          updated_at_utc TEXT NOT NULL,
-          FOREIGN KEY (meeting_uid) REFERENCES meetings(uid)
-        )
-      `,
-    },
-    {
-      q: `
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_meeting_participants_meeting_nick
-        ON meeting_participants (meeting_uid, nick)
-      `,
-    },
-    {
-      q: `
-        CREATE INDEX IF NOT EXISTS idx_meeting_participants_meeting_uid
-        ON meeting_participants (meeting_uid)
-      `,
-    },
-  ]).then(() => undefined);
+  schemaPromise = (async () => {
+    await executeStatement(`
+      CREATE TABLE IF NOT EXISTS users (
+        uid TEXT PRIMARY KEY,
+        username TEXT,
+        password_hash TEXT,
+        session_token TEXT,
+        created_at_utc TEXT,
+        updated_at_utc TEXT
+      )
+    `);
+    await ensureColumnExists("users", "username", "TEXT");
+    await ensureColumnExists("users", "password_hash", "TEXT");
+    await ensureColumnExists("users", "session_token", "TEXT");
+    await ensureColumnExists("users", "created_at_utc", "TEXT");
+    await ensureColumnExists("users", "updated_at_utc", "TEXT");
+    await executeStatement("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users (username)");
+    await executeStatement("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_session_token ON users (session_token)");
+
+    await executeStatement(`
+      CREATE TABLE IF NOT EXISTS meetings (
+        uid TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        owner_uid TEXT,
+        created_at_utc TEXT NOT NULL
+      )
+    `);
+    await ensureColumnExists("meetings", "owner_uid", "TEXT");
+    await executeStatement("CREATE INDEX IF NOT EXISTS idx_meetings_owner_uid ON meetings (owner_uid)");
+
+    await executeStatement(`
+      CREATE TABLE IF NOT EXISTS meeting_participants (
+        uid TEXT PRIMARY KEY,
+        meeting_uid TEXT NOT NULL,
+        nick TEXT NOT NULL,
+        local_schedule TEXT NOT NULL DEFAULT '[]',
+        utc_schedule TEXT NOT NULL DEFAULT '[]',
+        timezone TEXT NOT NULL,
+        updated_at_local TEXT NOT NULL,
+        updated_at_utc TEXT NOT NULL,
+        FOREIGN KEY (meeting_uid) REFERENCES meetings(uid)
+      )
+    `);
+    await executeStatement(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_meeting_participants_meeting_nick
+      ON meeting_participants (meeting_uid, nick)
+    `);
+    await executeStatement(`
+      CREATE INDEX IF NOT EXISTS idx_meeting_participants_meeting_uid
+      ON meeting_participants (meeting_uid)
+    `);
+  })();
 
   return schemaPromise;
+}
+
+function mapUser(record: Record<string, unknown>): UserRecord {
+  return {
+    uid: String(record.uid || ""),
+    username: String(record.username || ""),
+    passwordHash: String(record.password_hash || ""),
+    sessionToken: record.session_token ? String(record.session_token) : null,
+    createdAtUTC: String(record.created_at_utc || ""),
+    updatedAtUTC: String(record.updated_at_utc || ""),
+  };
 }
 
 function mapMeeting(record: Record<string, unknown>): MeetingRecord {
   return {
     uid: String(record.uid || ""),
     title: String(record.title || ""),
+    ownerUid: String(record.owner_uid || ""),
     createdAtUTC: String(record.created_at_utc || ""),
+  };
+}
+
+function mapDashboardMeeting(record: Record<string, unknown>): DashboardMeetingRecord {
+  return {
+    ...mapMeeting(record),
+    participantCount: Number(record.participant_count || 0),
   };
 }
 
@@ -190,42 +254,147 @@ function mapParticipant(record: Record<string, unknown>): MeetingParticipantReco
 }
 
 async function getMeetingRow(meetingUid: string) {
-  const payload = await executeStatements([
-    {
-      q: "SELECT * FROM meetings WHERE uid = ? LIMIT 1",
-      params: [meetingUid],
-    },
-  ]);
-
+  const payload = await executeStatement("SELECT * FROM meetings WHERE uid = ? LIMIT 1", [meetingUid]);
   const rows = rowsToObjects(getFirstResult(payload));
   return rows[0] || null;
 }
 
-export async function createMeetingTorso(title: string) {
+export async function createUserTorso(data: {
+  uid: string;
+  username: string;
+  passwordHash: string;
+  createdAtUTC: string;
+  updatedAtUTC: string;
+}) {
+  await ensureSchema();
+
+  const uid = normalizeString(data.uid);
+  const username = normalizeString(data.username);
+  const passwordHash = normalizeString(data.passwordHash);
+
+  if (!uid || !username || !passwordHash) {
+    throw new Error("uid, username y passwordHash son requeridos");
+  }
+
+  try {
+    await executeStatement(`
+      INSERT INTO users (uid, username, password_hash, session_token, created_at_utc, updated_at_utc)
+      VALUES (?, ?, ?, NULL, ?, ?)
+    `, [uid, username, passwordHash, data.createdAtUTC, data.updatedAtUTC]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Error al crear usuario";
+    if (message.includes("idx_users_username") || message.includes("UNIQUE constraint failed: users.username")) {
+      throw new Error(`Usuario "${username}" ya esta en uso`);
+    }
+    throw error;
+  }
+
+  const created = await getUserByUidTorso(uid);
+  if (!created) throw new Error("No se pudo cargar el usuario creado");
+  return created;
+}
+
+export async function getUserByUidTorso(uid: string) {
+  await ensureSchema();
+
+  const cleanUid = normalizeString(uid);
+  if (!cleanUid) return null;
+
+  const payload = await executeStatement("SELECT * FROM users WHERE uid = ? LIMIT 1", [cleanUid]);
+  const rows = rowsToObjects(getFirstResult(payload));
+  return rows[0] ? mapUser(rows[0]) : null;
+}
+
+export async function getUserByUsernameTorso(username: string) {
+  await ensureSchema();
+
+  const cleanUsername = normalizeString(username);
+  if (!cleanUsername) return null;
+
+  const payload = await executeStatement("SELECT * FROM users WHERE username = ? LIMIT 1", [cleanUsername]);
+  const rows = rowsToObjects(getFirstResult(payload));
+  return rows[0] ? mapUser(rows[0]) : null;
+}
+
+export async function getUserBySessionTokenTorso(sessionToken: string) {
+  await ensureSchema();
+
+  const cleanToken = normalizeString(sessionToken);
+  if (!cleanToken) return null;
+
+  const payload = await executeStatement("SELECT * FROM users WHERE session_token = ? LIMIT 1", [cleanToken]);
+  const rows = rowsToObjects(getFirstResult(payload));
+  return rows[0] ? mapUser(rows[0]) : null;
+}
+
+export async function setUserSessionTokenTorso(uid: string, sessionToken: string | null, updatedAtUTC: string) {
+  await ensureSchema();
+
+  await executeStatement(`
+    UPDATE users
+    SET session_token = ?, updated_at_utc = ?
+    WHERE uid = ?
+  `, [sessionToken, updatedAtUTC, uid]);
+
+  return getUserByUidTorso(uid);
+}
+
+export async function createMeetingTorso(title: string, ownerUid: string) {
   await ensureSchema();
 
   const cleanTitle = normalizeString(title);
+  const cleanOwnerUid = normalizeString(ownerUid);
+
   if (!cleanTitle) {
     throw new Error("El titulo es requerido");
+  }
+
+  if (!cleanOwnerUid) {
+    throw new Error("El creador es requerido");
+  }
+
+  const owner = await getUserByUidTorso(cleanOwnerUid);
+  if (!owner) {
+    throw new Error("El usuario creador no existe");
   }
 
   const meeting: MeetingRecord = {
     uid: crypto.randomUUID(),
     title: cleanTitle,
+    ownerUid: cleanOwnerUid,
     createdAtUTC: new Date().toISOString(),
   };
 
-  await executeStatements([
-    {
-      q: `
-        INSERT INTO meetings (uid, title, created_at_utc)
-        VALUES (?, ?, ?)
-      `,
-      params: [meeting.uid, meeting.title, meeting.createdAtUTC],
-    },
-  ]);
+  await executeStatement(`
+    INSERT INTO meetings (uid, title, owner_uid, created_at_utc)
+    VALUES (?, ?, ?, ?)
+  `, [meeting.uid, meeting.title, meeting.ownerUid, meeting.createdAtUTC]);
 
   return meeting;
+}
+
+export async function listMeetingsByOwnerTorso(ownerUid: string) {
+  await ensureSchema();
+
+  const cleanOwnerUid = normalizeString(ownerUid);
+  if (!cleanOwnerUid) return [];
+
+  const payload = await executeStatement(`
+    SELECT
+      m.uid,
+      m.title,
+      m.owner_uid,
+      m.created_at_utc,
+      (
+        SELECT COUNT(*) FROM meeting_participants p WHERE p.meeting_uid = m.uid
+      ) AS participant_count
+    FROM meetings m
+    WHERE m.owner_uid = ?
+    ORDER BY m.created_at_utc DESC
+  `, [cleanOwnerUid]);
+
+  const rows = rowsToObjects(getFirstResult(payload));
+  return rows.map(mapDashboardMeeting);
 }
 
 export async function getMeetingTorso(meetingUid: string) {
@@ -236,30 +405,17 @@ export async function getMeetingTorso(meetingUid: string) {
     return null;
   }
 
-  // Two separate queries to avoid ambiguity with Turso batch response format
-  // (Turso returns [{results:[stmt1]}, {results:[stmt2]}] for batch, not a single merged object)
-  const meetingPayload = await executeStatements([
-    {
-      q: "SELECT * FROM meetings WHERE uid = ? LIMIT 1",
-      params: [cleanMeetingUid],
-    },
-  ]);
-
+  const meetingPayload = await executeStatement("SELECT * FROM meetings WHERE uid = ? LIMIT 1", [cleanMeetingUid]);
   const meetingRows = rowsToObjects(getFirstResult(meetingPayload));
   if (!meetingRows.length) {
     return null;
   }
 
-  const participantsPayload = await executeStatements([
-    {
-      q: `
-        SELECT * FROM meeting_participants
-        WHERE meeting_uid = ?
-        ORDER BY updated_at_utc DESC, nick ASC
-      `,
-      params: [cleanMeetingUid],
-    },
-  ]);
+  const participantsPayload = await executeStatement(`
+    SELECT * FROM meeting_participants
+    WHERE meeting_uid = ?
+    ORDER BY updated_at_utc DESC, nick ASC
+  `, [cleanMeetingUid]);
 
   const participantRows = rowsToObjects(getFirstResult(participantsPayload));
 
@@ -278,16 +434,11 @@ export async function getMeetingParticipantByUidTorso(meetingUid: string, uid: s
     return null;
   }
 
-  const payload = await executeStatements([
-    {
-      q: `
-        SELECT * FROM meeting_participants
-        WHERE meeting_uid = ? AND uid = ?
-        LIMIT 1
-      `,
-      params: [cleanMeetingUid, cleanUid],
-    },
-  ]);
+  const payload = await executeStatement(`
+    SELECT * FROM meeting_participants
+    WHERE meeting_uid = ? AND uid = ?
+    LIMIT 1
+  `, [cleanMeetingUid, cleanUid]);
 
   const rows = rowsToObjects(getFirstResult(payload));
   return rows[0] ? mapParticipant(rows[0]) : null;
@@ -302,16 +453,11 @@ export async function getMeetingParticipantByNickTorso(meetingUid: string, nick:
     return null;
   }
 
-  const payload = await executeStatements([
-    {
-      q: `
-        SELECT * FROM meeting_participants
-        WHERE meeting_uid = ? AND nick = ?
-        LIMIT 1
-      `,
-      params: [cleanMeetingUid, cleanNick],
-    },
-  ]);
+  const payload = await executeStatement(`
+    SELECT * FROM meeting_participants
+    WHERE meeting_uid = ? AND nick = ?
+    LIMIT 1
+  `, [cleanMeetingUid, cleanNick]);
 
   const rows = rowsToObjects(getFirstResult(payload));
   return rows[0] ? mapParticipant(rows[0]) : null;
@@ -344,18 +490,13 @@ export async function saveMeetingParticipantTorso(
     throw new Error("La reunion no existe");
   }
 
-  const nickConflict = await executeStatements([
-    {
-      q: `
-        SELECT uid FROM meeting_participants
-        WHERE meeting_uid = ? AND nick = ? AND uid != ?
-        LIMIT 1
-      `,
-      params: [cleanMeetingUid, cleanNick, cleanUid],
-    },
-  ]);
+  const nickConflictPayload = await executeStatement(`
+    SELECT uid FROM meeting_participants
+    WHERE meeting_uid = ? AND nick = ? AND uid != ?
+    LIMIT 1
+  `, [cleanMeetingUid, cleanNick, cleanUid]);
 
-  const conflictingRows = rowsToObjects(getFirstResult(nickConflict));
+  const conflictingRows = rowsToObjects(getFirstResult(nickConflictPayload));
   if (conflictingRows.length) {
     throw new Error(`Nick "${cleanNick}" ya esta en uso en esta reunion`);
   }
@@ -371,40 +512,35 @@ export async function saveMeetingParticipantTorso(
     timezone: normalizeString(data.timezone) || "UTC",
   };
 
-  await executeStatements([
-    {
-      q: `
-        INSERT INTO meeting_participants (
-          uid,
-          meeting_uid,
-          nick,
-          local_schedule,
-          utc_schedule,
-          timezone,
-          updated_at_local,
-          updated_at_utc
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(uid) DO UPDATE SET
-          meeting_uid = excluded.meeting_uid,
-          nick = excluded.nick,
-          local_schedule = excluded.local_schedule,
-          utc_schedule = excluded.utc_schedule,
-          timezone = excluded.timezone,
-          updated_at_local = excluded.updated_at_local,
-          updated_at_utc = excluded.updated_at_utc
-      `,
-      params: [
-        participant.uid,
-        participant.meetingUid,
-        participant.nick,
-        JSON.stringify(participant.localSchedule),
-        JSON.stringify(participant.utcSchedule),
-        participant.timezone,
-        participant.updatedAtLocal,
-        participant.updatedAtUTC,
-      ],
-    },
+  await executeStatement(`
+    INSERT INTO meeting_participants (
+      uid,
+      meeting_uid,
+      nick,
+      local_schedule,
+      utc_schedule,
+      timezone,
+      updated_at_local,
+      updated_at_utc
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(uid) DO UPDATE SET
+      meeting_uid = excluded.meeting_uid,
+      nick = excluded.nick,
+      local_schedule = excluded.local_schedule,
+      utc_schedule = excluded.utc_schedule,
+      timezone = excluded.timezone,
+      updated_at_local = excluded.updated_at_local,
+      updated_at_utc = excluded.updated_at_utc
+  `, [
+    participant.uid,
+    participant.meetingUid,
+    participant.nick,
+    JSON.stringify(participant.localSchedule),
+    JSON.stringify(participant.utcSchedule),
+    participant.timezone,
+    participant.updatedAtLocal,
+    participant.updatedAtUTC,
   ]);
 
   return participant;
