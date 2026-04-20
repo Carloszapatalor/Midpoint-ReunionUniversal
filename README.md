@@ -11,8 +11,6 @@ App en Deno + Hono para coordinar horarios entre varias personas.
 
 ## Desarrollo
 
-1. Configura `.env` con `TURSO_URL` y `TURSO_AUTH_TOKEN`.
-2. Ejecuta `deno task dev`.
-3. Abre `http://localhost:8000`.
-
-La app crea automaticamente las tablas `meetings` y `meeting_participants` en Turso si no existen.
+1. Configurar `.env` con `TURSO_URL` y `TURSO_AUTH_TOKEN`.
+2. Ejecutar `deno task dev`.
+3. Abrir `http://localhost:8000`.
