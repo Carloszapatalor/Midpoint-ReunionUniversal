@@ -45,6 +45,10 @@ type MeetingParticipantRecord = {
   timezone: string;
 };
 
+type MeetingParticipantPrivateRecord = MeetingParticipantRecord & {
+  accessToken: string;
+};
+
 type MeetingRecord = {
   uid: string;
   title: string;
@@ -151,7 +155,7 @@ async function getTableColumns(tableName: "users" | "meetings" | "meeting_partic
   return new Set(rows.map((row) => String(row.name || "")));
 }
 
-async function ensureColumnExists(tableName: "users" | "meetings" | "recovery_tokens", columnName: string, definition: string) {
+async function ensureColumnExists(tableName: "users" | "meetings" | "meeting_participants" | "recovery_tokens", columnName: string, definition: string) {
   const columns = await getTableColumns(tableName);
   if (!columns.has(columnName)) {
     await executeStatement(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
@@ -220,6 +224,7 @@ async function ensureSchema() {
         uid TEXT PRIMARY KEY,
         meeting_uid TEXT NOT NULL,
         nick TEXT NOT NULL,
+        access_token TEXT,
         local_schedule TEXT NOT NULL DEFAULT '[]',
         utc_schedule TEXT NOT NULL DEFAULT '[]',
         timezone TEXT NOT NULL,
@@ -228,6 +233,7 @@ async function ensureSchema() {
         FOREIGN KEY (meeting_uid) REFERENCES meetings(uid)
       )
     `);
+    await ensureColumnExists("meeting_participants", "access_token", "TEXT");
     await executeStatement(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_meeting_participants_meeting_nick
       ON meeting_participants (meeting_uid, nick)
@@ -289,6 +295,17 @@ function mapParticipant(record: Record<string, unknown>): MeetingParticipantReco
     updatedAtUTC: String(record.updated_at_utc || ""),
     timezone: String(record.timezone || "UTC"),
   };
+}
+
+function mapParticipantPrivate(record: Record<string, unknown>): MeetingParticipantPrivateRecord {
+  return {
+    ...mapParticipant(record),
+    accessToken: String(record.access_token || ""),
+  };
+}
+
+function generateParticipantAccessToken() {
+  return `${crypto.randomUUID()}${crypto.randomUUID()}`;
 }
 
 async function getMeetingRow(meetingUid: string) {
@@ -599,6 +616,25 @@ export async function getMeetingParticipantByUidTorso(meetingUid: string, uid: s
   return rows[0] ? mapParticipant(rows[0]) : null;
 }
 
+async function getMeetingParticipantByUidPrivateTorso(meetingUid: string, uid: string) {
+  await ensureSchema();
+
+  const cleanMeetingUid = normalizeString(meetingUid);
+  const cleanUid = normalizeString(uid);
+  if (!cleanMeetingUid || !cleanUid) {
+    return null;
+  }
+
+  const payload = await executeStatement(`
+    SELECT * FROM meeting_participants
+    WHERE meeting_uid = ? AND uid = ?
+    LIMIT 1
+  `, [cleanMeetingUid, cleanUid]);
+
+  const rows = rowsToObjects(getFirstResult(payload));
+  return rows[0] ? mapParticipantPrivate(rows[0]) : null;
+}
+
 export async function getMeetingParticipantByNickTorso(meetingUid: string, nick: string) {
   await ensureSchema();
 
@@ -618,11 +654,75 @@ export async function getMeetingParticipantByNickTorso(meetingUid: string, nick:
   return rows[0] ? mapParticipant(rows[0]) : null;
 }
 
+export async function getMeetingParticipantByNickWithAccessTorso(meetingUid: string, nick: string, accessToken: string) {
+  await ensureSchema();
+
+  const cleanMeetingUid = normalizeString(meetingUid);
+  const cleanNick = normalizeString(nick);
+  const cleanAccessToken = normalizeString(accessToken);
+  if (!cleanMeetingUid || !cleanNick) {
+    return { exists: false, reserved: false, participant: null, participantToken: "" };
+  }
+
+  const payload = await executeStatement(`
+    SELECT * FROM meeting_participants
+    WHERE meeting_uid = ? AND nick = ?
+    LIMIT 1
+  `, [cleanMeetingUid, cleanNick]);
+
+  const rows = rowsToObjects(getFirstResult(payload));
+  if (!rows[0]) {
+    return { exists: false, reserved: false, participant: null, participantToken: "" };
+  }
+
+  const participant = mapParticipantPrivate(rows[0]);
+  if (!cleanAccessToken || participant.accessToken !== cleanAccessToken) {
+    return { exists: true, reserved: true, participant: null, participantToken: "" };
+  }
+
+  return {
+    exists: true,
+    reserved: false,
+    participant: mapParticipant(rows[0]),
+    participantToken: participant.accessToken,
+  };
+}
+
+export async function getMeetingParticipantByUidWithAccessTorso(meetingUid: string, uid: string, accessToken: string) {
+  const participant = await getMeetingParticipantByUidPrivateTorso(meetingUid, uid);
+  const cleanAccessToken = normalizeString(accessToken);
+
+  if (!participant) {
+    return { exists: false, reserved: false, participant: null, participantToken: "" };
+  }
+
+  if (!cleanAccessToken || participant.accessToken !== cleanAccessToken) {
+    return { exists: true, reserved: true, participant: null, participantToken: "" };
+  }
+
+  return {
+    exists: true,
+    reserved: false,
+    participant: {
+      uid: participant.uid,
+      meetingUid: participant.meetingUid,
+      nick: participant.nick,
+      localSchedule: participant.localSchedule,
+      utcSchedule: participant.utcSchedule,
+      updatedAtLocal: participant.updatedAtLocal,
+      updatedAtUTC: participant.updatedAtUTC,
+      timezone: participant.timezone,
+    },
+    participantToken: participant.accessToken,
+  };
+}
+
 export async function saveMeetingParticipantTorso(
   meetingUid: string,
   data: {
     uid: string;
     nick: string;
+    participantToken?: string;
     localSchedule: string[];
     utcSchedule: string[];
     updatedAtLocal: string;
@@ -635,6 +735,7 @@ export async function saveMeetingParticipantTorso(
   const cleanMeetingUid = normalizeString(meetingUid);
   const cleanUid = normalizeString(data.uid);
   const cleanNick = normalizeString(data.nick);
+  const cleanParticipantToken = normalizeString(data.participantToken);
 
   if (!cleanMeetingUid || !cleanUid || !cleanNick) {
     throw new Error("meetingUid, uid y nick son requeridos");
@@ -656,6 +757,13 @@ export async function saveMeetingParticipantTorso(
     throw new Error(`Nick "${cleanNick}" ya esta en uso en esta reunion`);
   }
 
+  const existingParticipant = await getMeetingParticipantByUidPrivateTorso(cleanMeetingUid, cleanUid);
+  const accessToken = existingParticipant?.accessToken || generateParticipantAccessToken();
+
+  if (existingParticipant && existingParticipant.accessToken !== cleanParticipantToken) {
+    throw new Error("La sesion del participante ya no es valida");
+  }
+
   const participant: MeetingParticipantRecord = {
     uid: cleanUid,
     meetingUid: cleanMeetingUid,
@@ -672,16 +780,18 @@ export async function saveMeetingParticipantTorso(
       uid,
       meeting_uid,
       nick,
+      access_token,
       local_schedule,
       utc_schedule,
       timezone,
       updated_at_local,
       updated_at_utc
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(uid) DO UPDATE SET
       meeting_uid = excluded.meeting_uid,
       nick = excluded.nick,
+      access_token = excluded.access_token,
       local_schedule = excluded.local_schedule,
       utc_schedule = excluded.utc_schedule,
       timezone = excluded.timezone,
@@ -691,6 +801,7 @@ export async function saveMeetingParticipantTorso(
     participant.uid,
     participant.meetingUid,
     participant.nick,
+    accessToken,
     JSON.stringify(participant.localSchedule),
     JSON.stringify(participant.utcSchedule),
     participant.timezone,
@@ -698,5 +809,5 @@ export async function saveMeetingParticipantTorso(
     participant.updatedAtUTC,
   ]);
 
-  return participant;
+  return { participant, participantToken: accessToken };
 }

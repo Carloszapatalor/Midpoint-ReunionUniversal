@@ -104,7 +104,7 @@ function persistParticipantSession(user) {
   localStorage.setItem(getParticipantStorageKey(user.meetingUid), user.uid);
   localStorage.setItem(
     getParticipantSessionStorageKey(user.meetingUid),
-    JSON.stringify({ uid: user.uid, nick: user.nick }),
+    JSON.stringify({ uid: user.uid, nick: user.nick, participantToken: user.participantToken || "" }),
   );
 }
 
@@ -126,6 +126,11 @@ function clearParticipantSession(meetingUid) {
   if (!meetingUid) return;
   localStorage.removeItem(getParticipantStorageKey(meetingUid));
   localStorage.removeItem(getParticipantSessionStorageKey(meetingUid));
+}
+
+function getParticipantTokenForMeeting(meetingUid = state.currentMeeting?.uid) {
+  const session = meetingUid ? readParticipantSession(meetingUid) : null;
+  return session?.participantToken || state.currentParticipant?.participantToken || "";
 }
 
 function setAuthSession(user, sessionToken) {
@@ -552,7 +557,12 @@ function setMeetingState(meeting) {
 
 function applyParticipantData(user) {
   state.localSchedule = parseSchedule(user.localSchedule);
-  setParticipantLoggedIn({ uid: user.uid, nick: user.nick, meetingUid: user.meetingUid });
+  setParticipantLoggedIn({
+    uid: user.uid,
+    nick: user.nick,
+    meetingUid: user.meetingUid,
+    participantToken: user.participantToken || state.currentParticipant?.participantToken || getParticipantTokenForMeeting(user.meetingUid),
+  });
   updateMeetingUI();
 }
 
@@ -927,7 +937,11 @@ async function loadParticipantByUid(uid, showStatus = true) {
   if (!state.currentMeeting?.uid || !uid) return;
 
   try {
-    const { response, payload } = await apiFetch(`/api/meetings/${encodeURIComponent(state.currentMeeting.uid)}/participants/uid/${encodeURIComponent(uid)}`);
+    const participantToken = getParticipantTokenForMeeting(state.currentMeeting.uid);
+    const { response, payload } = await apiFetch(`/api/meetings/${encodeURIComponent(state.currentMeeting.uid)}/participants/uid/${encodeURIComponent(uid)}`,
+      {
+        headers: participantToken ? { "x-participant-token": participantToken } : {},
+      });
     if (response.status === 404 || !payload?.exists) {
       clearParticipantSession(state.currentMeeting.uid);
       if (state.currentParticipant?.uid === uid) {
@@ -936,9 +950,20 @@ async function loadParticipantByUid(uid, showStatus = true) {
       return;
     }
 
+    if (response.status === 409 || payload?.reserved) {
+      clearParticipantSession(state.currentMeeting.uid);
+      if (state.currentParticipant?.uid === uid) {
+        setParticipantLoggedOut({ clearStorage: false });
+      }
+      if (showStatus) {
+        setMeetingStatus(payload?.error || "Este nick ya esta reservado en otro dispositivo", "error");
+      }
+      return;
+    }
+
     if (!response.ok) return;
 
-    applyParticipantData(payload.participant);
+    applyParticipantData({ ...payload.participant, participantToken: payload.participantToken });
     if (showStatus) {
       setMeetingStatus(`Bienvenido de vuelta, ${payload.participant.nick}`, "ok");
     }
@@ -968,11 +993,18 @@ async function signInParticipant() {
   setMeetingStatus("Entrando a la reunion...", "loading");
 
   try {
-    const lookup = await apiFetch(`/api/meetings/${encodeURIComponent(state.currentMeeting.uid)}/participants/nick/${encodeURIComponent(nick)}`);
+    const storedSession = readParticipantSession(state.currentMeeting.uid);
+    const lookup = await apiFetch(`/api/meetings/${encodeURIComponent(state.currentMeeting.uid)}/participants/nick/${encodeURIComponent(nick)}`, {
+      headers: storedSession?.participantToken ? { "x-participant-token": storedSession.participantToken } : {},
+    });
     if (lookup.response.ok && lookup.payload?.exists) {
-      applyParticipantData(lookup.payload.participant);
+      applyParticipantData({ ...lookup.payload.participant, participantToken: lookup.payload.participantToken });
       setMeetingStatus(`Bienvenido de vuelta, ${nick}`, "ok");
       return;
+    }
+
+    if (lookup.response.status === 409 || lookup.payload?.reserved) {
+      throw new Error(lookup.payload?.error || "Ese nick ya fue reservado por otra persona en esta reunion");
     }
 
     const uid = generateUID();
@@ -981,6 +1013,7 @@ async function signInParticipant() {
       body: {
         uid,
         nick,
+        participantToken: storedSession?.participantToken || "",
         localSchedule: [],
         utcSchedule: [],
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
@@ -991,7 +1024,7 @@ async function signInParticipant() {
       throw new Error(created.payload?.error || "No se pudo entrar a la reunion");
     }
 
-    applyParticipantData(created.payload.participant);
+    applyParticipantData({ ...created.payload.participant, participantToken: created.payload.participantToken });
     await loadMeeting(state.currentMeeting.uid, { restoreParticipantSession: false });
     setMeetingStatus(`Entraste como ${nick}. Marca tus horarios y guarda.`, "ok");
   } catch (error) {
@@ -1014,6 +1047,7 @@ async function saveParticipantSchedule() {
       body: {
         uid: state.currentParticipant.uid,
         nick: state.currentParticipant.nick,
+        participantToken: state.currentParticipant.participantToken || getParticipantTokenForMeeting(state.currentMeeting.uid),
         localSchedule: state.localSchedule,
         utcSchedule: getCurrentUtcSchedule(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
@@ -1024,7 +1058,7 @@ async function saveParticipantSchedule() {
       throw new Error(payload?.error || "No se pudo guardar el horario");
     }
 
-    applyParticipantData(payload.participant);
+    applyParticipantData({ ...payload.participant, participantToken: payload.participantToken });
     await loadMeeting(state.currentMeeting.uid, { restoreParticipantSession: false });
     setMeetingStatus("Horario guardado y sincronizado con la reunion.", "ok");
   } catch (error) {

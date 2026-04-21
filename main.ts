@@ -7,7 +7,9 @@ import {
   createMeetingTorso,
   createUserTorso,
   getActivePasswordRecoveryTokenTorso,
+  getMeetingParticipantByNickWithAccessTorso,
   getMeetingParticipantByNickTorso,
+  getMeetingParticipantByUidWithAccessTorso,
   getMeetingParticipantByUidTorso,
   getMeetingTorso,
   getUserBySessionTokenTorso,
@@ -132,6 +134,10 @@ function getAuthToken(c: RequestContext) {
   const [scheme, token] = header.split(" ");
   if (scheme?.toLowerCase() !== "bearer" || !token) return "";
   return token.trim();
+}
+
+function getParticipantToken(c: RequestContext) {
+  return String(c.req.header("x-participant-token") || "").trim();
 }
 
 function sanitizeUser(user: { uid: string; username: string }) {
@@ -353,16 +359,21 @@ app.get("/api/meetings/:meetingUid", async (c) => {
 
 app.get("/api/meetings/:meetingUid/participants/uid/:uid", async (c) => {
   try {
-    const participant = await getMeetingParticipantByUidTorso(
+    const result = await getMeetingParticipantByUidWithAccessTorso(
       c.req.param("meetingUid"),
       c.req.param("uid"),
+      getParticipantToken(c),
     );
 
-    if (!participant) {
+    if (!result.exists) {
       return c.json({ exists: false }, 404);
     }
 
-    return c.json({ exists: true, participant });
+    if (result.reserved || !result.participant) {
+      return c.json({ exists: true, reserved: true, error: "Este participante ya esta reservado en otro dispositivo" }, 409);
+    }
+
+    return c.json({ exists: true, participant: result.participant, participantToken: result.participantToken });
   } catch (error) {
     console.error("Error obteniendo participante por uid:", error);
     return c.json({ error: "Error al obtener el participante" }, 500);
@@ -371,16 +382,21 @@ app.get("/api/meetings/:meetingUid/participants/uid/:uid", async (c) => {
 
 app.get("/api/meetings/:meetingUid/participants/nick/:nick", async (c) => {
   try {
-    const participant = await getMeetingParticipantByNickTorso(
+    const result = await getMeetingParticipantByNickWithAccessTorso(
       c.req.param("meetingUid"),
       c.req.param("nick"),
+      getParticipantToken(c),
     );
 
-    if (!participant) {
+    if (!result.exists) {
       return c.json({ exists: false }, 404);
     }
 
-    return c.json({ exists: true, participant });
+    if (result.reserved || !result.participant) {
+      return c.json({ exists: true, reserved: true, error: "Ese nick ya fue reservado por la primera persona que entro con el" }, 409);
+    }
+
+    return c.json({ exists: true, participant: result.participant, participantToken: result.participantToken });
   } catch (error) {
     console.error("Error obteniendo participante por nick:", error);
     return c.json({ error: "Error al obtener el participante" }, 500);
@@ -390,7 +406,7 @@ app.get("/api/meetings/:meetingUid/participants/nick/:nick", async (c) => {
 app.post("/api/meetings/:meetingUid/participants", async (c) => {
   try {
     const meetingUid = c.req.param("meetingUid");
-    const { uid, nick, localSchedule, utcSchedule, timezone } = await c.req.json();
+    const { uid, nick, participantToken, localSchedule, utcSchedule, timezone } = await c.req.json();
 
     if (!uid || !nick) {
       return c.json({ error: "uid y nick son requeridos" }, 400);
@@ -400,6 +416,7 @@ app.post("/api/meetings/:meetingUid/participants", async (c) => {
     const participant = await saveMeetingParticipantTorso(meetingUid, {
       uid: String(uid),
       nick: String(nick),
+      participantToken: String(participantToken || ""),
       localSchedule: Array.isArray(localSchedule) ? localSchedule : [],
       utcSchedule: Array.isArray(utcSchedule) ? utcSchedule : [],
       timezone: String(timezone || "UTC"),
@@ -407,11 +424,11 @@ app.post("/api/meetings/:meetingUid/participants", async (c) => {
       updatedAtUTC: now.toISOString(),
     });
 
-    return c.json({ ok: true, participant });
+    return c.json({ ok: true, participant: participant.participant, participantToken: participant.participantToken });
   } catch (error) {
     console.error("Error guardando participante:", error);
     const message = error instanceof Error ? error.message : "Error al guardar el participante";
-    const status = message.includes("ya esta en uso") ? 409 : message.includes("no existe") ? 404 : 500;
+    const status = message.includes("ya esta en uso") || message.includes("sesion del participante") ? 409 : message.includes("no existe") ? 404 : 500;
     return c.json({ error: message }, status);
   }
 });
