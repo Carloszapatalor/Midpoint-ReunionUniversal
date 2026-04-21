@@ -9,8 +9,14 @@ App en Deno + Hono para coordinar horarios entre varias personas.
 - Cada persona entra al link, usa su nick y guarda su disponibilidad en horario local.
 - La vista UTC agrega a todos los participantes y resalta los mejores cruces horarios.
 
-## Desarrollo
+## Acerca de 
 
-1. Configurar `.env` con `TURSO_URL` y `TURSO_AUTH_TOKEN`.
-2. Ejecutar `deno task dev`.
-3. Abrir `http://localhost:8000`.
+MidPoint esta inspirado en las herramientas clásicas de disponibilidad para ofrecer una experiencia moderna y rapida. A diferencia de las soluciones tradicionales, este proyecto ha sido construido desde cero con un enfoque en:
+
+- Precisión Horaria: Gestión automática de zonas horarias (UTC) para equipos remotos.
+
+- Privacidad y Seguridad: Desarrollado bajo estándares de hardening para proteger la integridad de tus datos.
+
+- Rendimiento: Una interfaz ligera, rápida y sin anuncios, impulsada por tecnología Deno & Hono.
+
+- Desarrollado principalmente para mi uso personal y abierto al público para su uso.
