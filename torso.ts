@@ -456,6 +456,12 @@ export async function markPasswordRecoveryTokenUsedTorso(tokenHash: string, used
   await executeStatement("UPDATE recovery_tokens SET used_at_utc = ? WHERE token_hash = ?", [cleanUsedAtUTC, cleanTokenHash]);
 }
 
+function generateMeetingId(length = 4): string {
+  const alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const bytes = crypto.getRandomValues(new Uint8Array(length));
+  return Array.from(bytes).map((b) => alphabet[b % alphabet.length]).join("");
+}
+
 export async function createMeetingTorso(title: string, ownerUid: string) {
   await ensureSchema();
 
@@ -475,8 +481,16 @@ export async function createMeetingTorso(title: string, ownerUid: string) {
     throw new Error("El usuario creador no existe");
   }
 
+  let shortId = "";
+  for (let attempt = 0; attempt < 5; attempt++) {
+    shortId = generateMeetingId(4);
+    const existing = await getMeetingRow(shortId);
+    if (!existing) break;
+    if (attempt === 4) throw new Error("No se pudo generar un ID unico para la reunion, intenta de nuevo");
+  }
+
   const meeting: MeetingRecord = {
-    uid: crypto.randomUUID(),
+    uid: shortId,
     title: cleanTitle,
     ownerUid: cleanOwnerUid,
     createdAtUTC: new Date().toISOString(),
@@ -512,6 +526,30 @@ export async function listMeetingsByOwnerTorso(ownerUid: string) {
 
   const rows = rowsToObjects(getFirstResult(payload));
   return rows.map(mapDashboardMeeting);
+}
+
+export async function deleteMeetingByOwnerTorso(ownerUid: string, meetingUid: string) {
+  await ensureSchema();
+
+  const cleanOwnerUid = normalizeString(ownerUid);
+  const cleanMeetingUid = normalizeString(meetingUid);
+  if (!cleanOwnerUid || !cleanMeetingUid) {
+    throw new Error("ownerUid y meetingUid son requeridos");
+  }
+
+  const payload = await executeStatement(
+    "SELECT uid FROM meetings WHERE uid = ? AND owner_uid = ? LIMIT 1",
+    [cleanMeetingUid, cleanOwnerUid],
+  );
+  const rows = rowsToObjects(getFirstResult(payload));
+  if (!rows.length) {
+    return { deleted: false };
+  }
+
+  await executeStatement("DELETE FROM meeting_participants WHERE meeting_uid = ?", [cleanMeetingUid]);
+  await executeStatement("DELETE FROM meetings WHERE uid = ? AND owner_uid = ?", [cleanMeetingUid, cleanOwnerUid]);
+
+  return { deleted: true };
 }
 
 export async function getMeetingTorso(meetingUid: string) {

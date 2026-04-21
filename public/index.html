@@ -94,30 +94,9 @@
 
     <section id="meeting-view" class="view-stack hidden">
       <section class="hero-panel meeting-hero">
-        <p class="eyebrow">Reunion publica</p>
+        <p class="eyebrow">Reunion activa</p>
         <h1 id="meeting-hero-title">Coordina una reunion por link</h1>
-        <p class="hero-copy">
-          Cualquier persona con el link puede ver la disponibilidad global en UTC. Solo necesita escribir un nick para proponer su propio horario.
-        </p>
-      </section>
-
-      <section id="meeting-details" class="panel hidden">
-        <div class="meeting-head">
-          <div>
-            <p class="panel-kicker">Reunion activa</p>
-            <h2 id="meeting-name">Sin reunion</h2>
-          </div>
-          <div class="meeting-chip" id="meeting-code">UID pendiente</div>
-        </div>
-
-        <div class="meeting-share-row">
-          <input id="meeting-link" class="field-input" readonly>
-          <button id="btn-copy-link" onclick="copyMeetingLink()" class="action-btn action-btn-secondary" disabled>
-            Copiar link
-          </button>
-        </div>
-
-        <p id="meeting-stats" class="meeting-stats">Abre una reunion para comenzar.</p>
+        <p class="hero-copy">Escribe tu nick, entra a la reunion, marca los bloques donde puedes asistir en tu horario local y presiona Guardar horario. Tu disponibilidad se reflejara automaticamente en la vista UTC.</p>
       </section>
 
       <section class="panel auth-panel">
@@ -142,13 +121,12 @@
       </section>
 
       <section class="grid-layout">
-        <div class="panel">
+        <div id="local-schedule-panel" class="panel hidden">
           <div class="panel-header">
             <div>
-              <p class="panel-kicker">Tu horario</p>
-              <h2>Vista local</h2>
+              <p id="local-tz-label" class="panel-kicker">Tu horario</p>
             </div>
-            <p class="panel-note">Marca los bloques donde puedes asistir.</p>
+            <p id="local-tz-note" class="panel-note">Elige tu disponibilidad en tu horario local. Se reflejará automáticamente en la vista UTC.</p>
           </div>
           <div id="grid-local"></div>
         </div>
@@ -157,7 +135,7 @@
           <div class="panel-header">
             <div>
               <p class="panel-kicker">Cruce global</p>
-              <h2>Vista UTC</h2>
+              <h2>HORARIO UTC</h2>
             </div>
             <p class="panel-note">El color verde indica acumulacion de personas disponibles.</p>
           </div>

@@ -2,6 +2,7 @@ import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { serveStatic } from "https://deno.land/x/hono/middleware.ts";
 import type { Context } from "https://deno.land/x/hono/mod.ts";
 import {
+  deleteMeetingByOwnerTorso,
   createPasswordRecoveryTokenTorso,
   createMeetingTorso,
   createUserTorso,
@@ -305,6 +306,31 @@ app.post("/api/meetings", async (c) => {
   } catch (error) {
     console.error("Error creando reunion:", error);
     const message = error instanceof Error ? error.message : "Error al crear la reunion";
+    return c.json({ error: message }, 500);
+  }
+});
+
+app.delete("/api/meetings/:meetingUid", async (c) => {
+  try {
+    const user = await requireAuth(c);
+    if (!user) {
+      return c.json({ error: "Debes iniciar sesion para eliminar reuniones" }, 401);
+    }
+
+    const meetingUid = String(c.req.param("meetingUid") || "").trim();
+    if (!meetingUid) {
+      return c.json({ error: "meetingUid es requerido" }, 400);
+    }
+
+    const result = await deleteMeetingByOwnerTorso(user.uid, meetingUid);
+    if (!result.deleted) {
+      return c.json({ error: "Reunion no encontrada o sin permisos" }, 404);
+    }
+
+    return c.json({ ok: true, deleted: true });
+  } catch (error) {
+    console.error("Error eliminando reunion:", error);
+    const message = error instanceof Error ? error.message : "Error al eliminar la reunion";
     return c.json({ error: message }, 500);
   }
 });

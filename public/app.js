@@ -212,11 +212,11 @@ function renderOwnedMeetings() {
         <div class="meeting-card-copy">
           <p class="meeting-card-title">${escapeHtml(meeting.title)}</p>
           <p class="meeting-card-meta">${escapeHtml(formatDate(meeting.createdAtUTC))} · ${meeting.participantCount} participante(s)</p>
-          <p class="meeting-card-code">${escapeHtml(meeting.uid)}</p>
         </div>
         <div class="meeting-card-actions">
           <button type="button" class="action-btn action-btn-secondary action-btn-small" onclick="openOwnedMeeting('${meeting.uid}')">Abrir</button>
           <button type="button" class="action-btn action-btn-secondary action-btn-small" onclick="copyOwnedMeetingLink('${meeting.uid}')">Copiar link</button>
+          <button type="button" class="action-btn action-btn-secondary action-btn-small" onclick="deleteOwnedMeeting('${meeting.uid}', '${escapeHtml(meeting.title)}')">Eliminar</button>
         </div>
       </article>
     `)
@@ -467,6 +467,42 @@ async function copyOwnedMeetingLink(meetingUid) {
   }
 }
 
+async function deleteOwnedMeeting(meetingUid, meetingTitle = "") {
+  if (!state.authUser) {
+    setLineStatus("dashboard-status", "Debes iniciar sesion para eliminar reuniones", "error");
+    return;
+  }
+
+  const title = String(meetingTitle || "").trim();
+  const message = title
+    ? `Vas a eliminar la reunion \"${title}\". Esta accion no se puede deshacer. Deseas continuar?`
+    : "Vas a eliminar esta reunion. Esta accion no se puede deshacer. Deseas continuar?";
+
+  const confirmed = globalThis.confirm(message);
+  if (!confirmed) {
+    return;
+  }
+
+  setLineStatus("dashboard-status", "Eliminando reunion...", "loading");
+
+  try {
+    const { response, payload } = await apiFetch(`/api/meetings/${encodeURIComponent(meetingUid)}`, {
+      method: "DELETE",
+      auth: true,
+    });
+
+    if (!response.ok || !payload?.ok) {
+      throw new Error(payload?.error || "No se pudo eliminar la reunion");
+    }
+
+    setLineStatus("dashboard-status", "Reunion eliminada", "ok");
+    await loadDashboardMeetings();
+  } catch (error) {
+    console.error(error);
+    setLineStatus("dashboard-status", error.message || "Error al eliminar la reunion", "error");
+  }
+}
+
 function setMeetingStatus(message, type = "info") {
   setLineStatus("meeting-status", message, type);
 }
@@ -478,6 +514,7 @@ function setParticipantLoggedIn(user) {
   query("nick").disabled = true;
   query("btn-signin").textContent = "Salir";
   query("btn-save").disabled = false;
+  query("local-schedule-panel")?.classList.remove("hidden");
   setMeetingStatus(`Dentro de la reunion como ${user.nick}`, "ok");
 }
 
@@ -492,37 +529,24 @@ function setParticipantLoggedOut(options = { clearStorage: true }) {
   query("nick").disabled = false;
   query("btn-signin").textContent = "Entrar";
   query("btn-save").disabled = true;
+  query("local-schedule-panel")?.classList.add("hidden");
   updateMeetingUI();
   setMeetingStatus("", "info");
 }
 
 function setMeetingState(meeting) {
   state.currentMeeting = meeting;
-  const details = query("meeting-details");
-  const copyButton = query("btn-copy-link");
 
   if (!meeting) {
-    details.classList.add("hidden");
     query("meeting-hero-title").textContent = "Coordina una reunion por link";
-    query("meeting-name").textContent = "Sin reunion";
-    query("meeting-code").textContent = "UID pendiente";
-    query("meeting-link").value = "";
-    query("meeting-stats").textContent = "Abre una reunion para comenzar.";
     query("participant-list").innerHTML = "";
     query("utc-summary").textContent = "Esperando participantes.";
-    copyButton.disabled = true;
     setParticipantLoggedOut({ clearStorage: false });
     stopAutoRefresh();
     return;
   }
 
-  details.classList.remove("hidden");
   query("meeting-hero-title").textContent = meeting.title;
-  query("meeting-name").textContent = meeting.title;
-  query("meeting-code").textContent = meeting.uid;
-  query("meeting-link").value = getMeetingLink(meeting.uid);
-  query("meeting-stats").textContent = `${meeting.participants.length} participante(s) en esta reunion.`;
-  copyButton.disabled = false;
   startAutoRefresh();
 }
 
@@ -1023,9 +1047,16 @@ function startAutoRefresh() {
   }, 15000);
 }
 
+function updateLocalTimezoneLabel() {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const label = query("local-tz-label");
+  if (label) label.textContent = `Tu horario · ${tz}`;
+}
+
 async function init() {
   renderGrid("grid-local", "L");
   renderGrid("grid-utc", "U");
+  updateLocalTimezoneLabel();
   updateNavigation();
   await restoreAuthSession();
 
@@ -1051,6 +1082,7 @@ globalThis.logoutUser = logoutUser;
 globalThis.createOwnedMeeting = createOwnedMeeting;
 globalThis.openOwnedMeeting = openOwnedMeeting;
 globalThis.copyOwnedMeetingLink = copyOwnedMeetingLink;
+globalThis.deleteOwnedMeeting = deleteOwnedMeeting;
 globalThis.copyMeetingLink = copyMeetingLink;
 globalThis.signInParticipant = signInParticipant;
 globalThis.saveParticipantSchedule = saveParticipantSchedule;
