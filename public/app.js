@@ -665,20 +665,24 @@ function renderParticipantList(participants) {
 
 function renderUtcSummary(participants, aggregate, maxCount) {
   const summary = query("utc-summary");
+  const footer = query("utc-overview-footer");
   if (!summary) return;
 
   if (!state.currentMeeting) {
-    summary.textContent = "Abre una reunion para ver coincidencias.";
+    summary.innerHTML = '<div class="summary-empty">Abre una reunion para ver coincidencias.</div>';
+    footer?.classList.add("hidden");
     return;
   }
 
   if (!participants.length) {
-    summary.textContent = "Aun no hay horarios guardados en esta reunion.";
+    summary.innerHTML = '<div class="summary-empty">Aun no hay horarios guardados en esta reunion.</div>';
+    footer?.classList.add("hidden");
     return;
   }
 
   if (!maxCount) {
-    summary.textContent = "Todavia no hay bloques marcados por los participantes.";
+    summary.innerHTML = '<div class="summary-empty">Todavia no hay bloques marcados por los participantes.</div>';
+    footer?.classList.add("hidden");
     return;
   }
 
@@ -687,9 +691,20 @@ function renderUtcSummary(participants, aggregate, maxCount) {
     .sort(([left], [right]) => left.localeCompare(right))
     .slice(0, 4);
 
-  summary.innerHTML = bestSlots
-    .map(([slot, entry]) => `<strong>${formatUtcSlot(slot)}</strong> · ${entry.count}/${participants.length} disponibles`)
-    .join("<br>");
+  summary.innerHTML = `
+    <div class="summary-grid">
+      <div class="summary-best-slots">
+        ${bestSlots.map(([slot, entry]) => `
+          <div class="summary-slot-row">
+            <span class="summary-slot-dot"></span>
+            <strong class="summary-slot-label">${escapeHtml(formatUtcSlot(slot))}</strong>
+            <span class="summary-slot-count">${entry.count}/${participants.length} disponibles</span>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+  footer?.classList.remove("hidden");
 }
 
 function getUtcTooltip() {
@@ -1050,7 +1065,9 @@ function startAutoRefresh() {
 function updateLocalTimezoneLabel() {
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const label = query("local-tz-label");
-  if (label) label.textContent = `Tu horario · ${tz}`;
+  const chip = query("local-tz-chip");
+  if (label) label.textContent = `Tu horario - ${tz}`;
+  if (chip) chip.textContent = tz;
 }
 
 async function init() {

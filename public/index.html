@@ -122,27 +122,46 @@
 
       <section class="grid-layout">
         <div id="local-schedule-panel" class="panel hidden">
-          <div class="panel-header">
-            <div>
-              <p id="local-tz-label" class="panel-kicker">Tu horario</p>
+          <div class="schedule-panel-head schedule-panel-head-local">
+            <div class="schedule-panel-copy">
+              <p class="panel-kicker">Tu horario</p>
+              <h2>Horario local</h2>
+              <!-- <p id="local-tz-note" class="panel-note">Marca los bloques donde puedes asistir. Tu seleccion se convierte a UTC automaticamente.</p> -->
+              <ol class="local-guide-list">
+                <li><span class="local-guide-step">1</span><span>Haz clic en los bloques donde puedes asistir</span></li>
+                <li><span class="local-guide-step">2</span><span>Los bloques se convierten a UTC automaticamente</span></li>
+                <li><span class="local-guide-step">3</span><span>Presiona Guardar horario para registrar tu disponibilidad</span></li>
+              </ol>
+              <div class="timezone-chip-row">
+                <span class="timezone-chip-label">Zona horaria detectada</span>
+                <strong id="local-tz-chip" class="timezone-chip-value">UTC</strong>
+              </div>
             </div>
-            <p id="local-tz-note" class="panel-note">Elige tu disponibilidad en tu horario local. Se reflejará automáticamente en la vista UTC.</p>
           </div>
-          <div id="grid-local"></div>
+          <div class="schedule-grid-shell">
+            <div id="grid-local"></div>
+          </div>
         </div>
 
         <div class="panel">
-          <div class="panel-header">
-            <div>
+          <div class="schedule-panel-head schedule-panel-head-utc">
+            <div class="schedule-panel-copy">
               <p class="panel-kicker">Cruce global</p>
-              <h2>HORARIO UTC</h2>
+              <h2>Horario UTC</h2>
             </div>
-            <p class="panel-note">El color verde indica acumulacion de personas disponibles.</p>
+            <p class="panel-note utc-panel-note">El color verde indica acumulacion de personas disponibles.</p>
           </div>
 
-          <div id="utc-summary" class="summary-box">Esperando participantes.</div>
-          <div id="participant-list" class="participant-list"></div>
-          <div id="grid-utc"></div>
+          <div class="utc-overview">
+            <div id="utc-summary" class="summary-box">Esperando participantes.</div>
+            <div id="utc-overview-footer" class="utc-overview-footer hidden">
+              <div id="participant-list" class="participant-list"></div>
+              <p class="summary-legend-static">Verde = mas personas disponibles</p>
+            </div>
+          </div>
+          <div class="schedule-grid-shell">
+            <div id="grid-utc"></div>
+          </div>
         </div>
       </section>
     </section>
