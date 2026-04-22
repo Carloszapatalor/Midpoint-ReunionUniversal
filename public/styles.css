@@ -104,6 +104,16 @@ body.page-shell {
   padding-bottom: 22px;
 }
 
+.hero-panel-danger {
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, 0.13), rgba(13, 22, 40, 0.94)),
+    var(--panel-strong);
+}
+
+.hero-panel-danger .eyebrow {
+  color: var(--danger);
+}
+
 .eyebrow,
 .panel-kicker {
   margin: 0 0 8px;

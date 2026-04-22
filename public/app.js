@@ -161,6 +161,23 @@ function updateNavigation() {
 function showView(mode) {
   query("dashboard-view")?.classList.toggle("hidden", mode !== "dashboard");
   query("meeting-view")?.classList.toggle("hidden", mode !== "meeting");
+  query("not-found-view")?.classList.toggle("hidden", mode !== "not-found");
+}
+
+function showMeetingNotFound() {
+  showView("not-found");
+  const statusEl = document.getElementById("not-found-redirect-status");
+  let seconds = 5;
+  if (statusEl) statusEl.textContent = `Redirigiendo al inicio en ${seconds}s...`;
+  const interval = setInterval(() => {
+    seconds--;
+    if (seconds <= 0) {
+      clearInterval(interval);
+      goToDashboard();
+    } else if (statusEl) {
+      statusEl.textContent = `Redirigiendo al inicio en ${seconds}s...`;
+    }
+  }, 1000);
 }
 
 function formatDate(isoString) {
@@ -900,9 +917,8 @@ async function loadMeeting(meetingUid, { restoreParticipantSession = true } = {}
     const { response, payload } = await apiFetch(`/api/meetings/${encodeURIComponent(meetingUid)}`);
 
     if (response.status === 404 || !payload?.exists) {
-      setMeetingState(null);
-      updateMeetingUI();
-      throw new Error(payload?.error || "La reunion no existe");
+      showMeetingNotFound();
+      return;
     }
 
     if (!response.ok) {
@@ -910,6 +926,7 @@ async function loadMeeting(meetingUid, { restoreParticipantSession = true } = {}
     }
 
     setMeetingState(payload.meeting);
+    showView("meeting");
     updateMeetingUI();
 
     const withSchedule = payload.meeting.participants.filter(
@@ -1113,8 +1130,6 @@ async function init() {
 
   const meetingUid = getMeetingUidFromUrl();
   if (meetingUid) {
-    showView("meeting");
-    setMeetingStatus("Cargando horarios de la reunion...", "loading");
     await loadMeeting(meetingUid);
     return;
   }
