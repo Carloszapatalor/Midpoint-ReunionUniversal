@@ -42,6 +42,8 @@
         <div class="auth-form-grid auth-form-grid-single">
           <input id="auth-username" type="text" placeholder="Usuario" class="field-input">
           <input id="auth-password" type="password" placeholder="Contrasena" class="field-input">
+          <input id="auth-nick-pin" type="password" inputmode="numeric" maxlength="6"
+                 placeholder="PIN del nick reservado" class="field-input hidden">
         </div>
 
         <div class="auth-row auth-row-wrap auth-actions-row">
@@ -113,17 +115,18 @@
         <p class="hero-copy">Escribe tu nick, entra a la reunion, marca los bloques donde puedes asistir en tu horario local y presiona Guardar horario. Tu disponibilidad se reflejara automaticamente en la vista UTC.</p>
       </section>
 
-      <section class="panel auth-panel">
+      <section class="panel auth-panel auth-panel-vertical">
         <div class="panel-header panel-header-compact">
-          <div>
-            <p class="panel-kicker">Participar</p>
-            <h2>Nick temporal</h2>
-          </div>
+          <p class="panel-kicker">Participar</p>
           <p class="panel-note">No necesitas registrarte para proponer horario en esta reunion.</p>
         </div>
 
-        <div class="auth-row auth-row-wrap">
-          <input id="nick" placeholder="Tu nick" class="field-input">
+        <input id="nick" placeholder="Tu nick" class="field-input">
+        <input id="participant-pin" type="password" inputmode="numeric" maxlength="6"
+               placeholder="PIN de acceso (opcional)" class="field-input participant-pin-field">
+        <p class="participant-pin-note">El PIN protege tu nick: lo recuperas desde otro dispositivo y puedes usarlo para crear una cuenta.</p>
+
+        <div class="auth-row auth-row-wrap auth-actions-row">
           <button id="btn-signin" onclick="signInParticipant()" class="action-btn action-btn-secondary">
             Entrar
           </button>
