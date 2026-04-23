@@ -1059,6 +1059,13 @@ async function signInParticipant() {
     return;
   }
 
+  const pinRawEarly = query("participant-pin").value.trim();
+  if (!pinRawEarly) {
+    setMeetingStatus("El PIN es obligatorio para proteger tu nick", "error");
+    query("participant-pin")?.focus();
+    return;
+  }
+
   query("btn-signin").disabled = true;
   setMeetingStatus("Entrando a la reunion...", "loading");
 
