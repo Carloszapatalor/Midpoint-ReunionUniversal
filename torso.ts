@@ -47,6 +47,7 @@ type MeetingParticipantRecord = {
 
 type MeetingParticipantPrivateRecord = MeetingParticipantRecord & {
   accessToken: string;
+  pinHash: string | null;
 };
 
 type MeetingRecord = {
@@ -234,6 +235,7 @@ async function ensureSchema() {
       )
     `);
     await ensureColumnExists("meeting_participants", "access_token", "TEXT");
+    await ensureColumnExists("meeting_participants", "pin_hash", "TEXT");
     await executeStatement(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_meeting_participants_meeting_nick
       ON meeting_participants (meeting_uid, nick)
@@ -301,6 +303,7 @@ function mapParticipantPrivate(record: Record<string, unknown>): MeetingParticip
   return {
     ...mapParticipant(record),
     accessToken: String(record.access_token || ""),
+    pinHash: record.pin_hash ? String(record.pin_hash) : null,
   };
 }
 
@@ -635,6 +638,18 @@ async function getMeetingParticipantByUidPrivateTorso(meetingUid: string, uid: s
   return rows[0] ? mapParticipantPrivate(rows[0]) : null;
 }
 
+export async function getMeetingNickPinTorso(nick: string) {
+  await ensureSchema();
+  const cleanNick = normalizeString(nick);
+  if (!cleanNick) return null;
+  const payload = await executeStatement(
+    "SELECT pin_hash FROM meeting_participants WHERE nick = ? AND pin_hash IS NOT NULL LIMIT 1",
+    [cleanNick],
+  );
+  const rows = rowsToObjects(getFirstResult(payload));
+  return rows[0]?.pin_hash ? String(rows[0].pin_hash) : null;
+}
+
 export async function getMeetingParticipantByNickTorso(meetingUid: string, nick: string) {
   await ensureSchema();
 
@@ -654,14 +669,21 @@ export async function getMeetingParticipantByNickTorso(meetingUid: string, nick:
   return rows[0] ? mapParticipant(rows[0]) : null;
 }
 
-export async function getMeetingParticipantByNickWithAccessTorso(meetingUid: string, nick: string, accessToken: string) {
+export async function getMeetingParticipantByNickWithAccessTorso(
+  meetingUid: string,
+  nick: string,
+  accessToken: string,
+  pinHash: string = "",
+) {
   await ensureSchema();
 
   const cleanMeetingUid = normalizeString(meetingUid);
   const cleanNick = normalizeString(nick);
   const cleanAccessToken = normalizeString(accessToken);
+  const cleanPin = normalizeString(pinHash);
+
   if (!cleanMeetingUid || !cleanNick) {
-    return { exists: false, reserved: false, participant: null, participantToken: "" };
+    return { exists: false, reserved: false, participant: null, participantToken: "", hasPinRecovery: false };
   }
 
   const payload = await executeStatement(`
@@ -672,12 +694,21 @@ export async function getMeetingParticipantByNickWithAccessTorso(meetingUid: str
 
   const rows = rowsToObjects(getFirstResult(payload));
   if (!rows[0]) {
-    return { exists: false, reserved: false, participant: null, participantToken: "" };
+    return { exists: false, reserved: false, participant: null, participantToken: "", hasPinRecovery: false };
   }
 
   const participant = mapParticipantPrivate(rows[0]);
-  if (!cleanAccessToken || participant.accessToken !== cleanAccessToken) {
-    return { exists: true, reserved: true, participant: null, participantToken: "" };
+  const tokenValid = !!cleanAccessToken && participant.accessToken === cleanAccessToken;
+  const pinValid = !!cleanPin && !!participant.pinHash && participant.pinHash === cleanPin;
+
+  if (!tokenValid && !pinValid) {
+    return {
+      exists: true,
+      reserved: true,
+      participant: null,
+      participantToken: "",
+      hasPinRecovery: !!participant.pinHash,
+    };
   }
 
   return {
@@ -685,6 +716,7 @@ export async function getMeetingParticipantByNickWithAccessTorso(meetingUid: str
     reserved: false,
     participant: mapParticipant(rows[0]),
     participantToken: participant.accessToken,
+    hasPinRecovery: false,
   };
 }
 
@@ -723,6 +755,7 @@ export async function saveMeetingParticipantTorso(
     uid: string;
     nick: string;
     participantToken?: string;
+    pinHash?: string;
     localSchedule: string[];
     utcSchedule: string[];
     updatedAtLocal: string;
@@ -736,6 +769,7 @@ export async function saveMeetingParticipantTorso(
   const cleanUid = normalizeString(data.uid);
   const cleanNick = normalizeString(data.nick);
   const cleanParticipantToken = normalizeString(data.participantToken);
+  const cleanPinHash = normalizeString(data.pinHash);
 
   if (!cleanMeetingUid || !cleanUid || !cleanNick) {
     throw new Error("meetingUid, uid y nick son requeridos");
@@ -764,6 +798,9 @@ export async function saveMeetingParticipantTorso(
     throw new Error("La sesion del participante ya no es valida");
   }
 
+  // PIN solo se guarda la primera vez; una vez establecido no se puede sobreescribir
+  const pinToStore = cleanPinHash || existingParticipant?.pinHash || null;
+
   const participant: MeetingParticipantRecord = {
     uid: cleanUid,
     meetingUid: cleanMeetingUid,
@@ -781,17 +818,19 @@ export async function saveMeetingParticipantTorso(
       meeting_uid,
       nick,
       access_token,
+      pin_hash,
       local_schedule,
       utc_schedule,
       timezone,
       updated_at_local,
       updated_at_utc
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(uid) DO UPDATE SET
       meeting_uid = excluded.meeting_uid,
       nick = excluded.nick,
       access_token = excluded.access_token,
+      pin_hash = CASE WHEN pin_hash IS NULL THEN excluded.pin_hash ELSE pin_hash END,
       local_schedule = excluded.local_schedule,
       utc_schedule = excluded.utc_schedule,
       timezone = excluded.timezone,
@@ -802,6 +841,7 @@ export async function saveMeetingParticipantTorso(
     participant.meetingUid,
     participant.nick,
     accessToken,
+    pinToStore,
     JSON.stringify(participant.localSchedule),
     JSON.stringify(participant.utcSchedule),
     participant.timezone,
@@ -810,4 +850,31 @@ export async function saveMeetingParticipantTorso(
   ]);
 
   return { participant, participantToken: accessToken };
+}
+
+export async function deleteMeetingParticipantByNickTorso(ownerUid: string, meetingUid: string, nick: string) {
+  await ensureSchema();
+
+  const cleanOwnerUid = normalizeString(ownerUid);
+  const cleanMeetingUid = normalizeString(meetingUid);
+  const cleanNick = normalizeString(nick);
+
+  if (!cleanOwnerUid || !cleanMeetingUid || !cleanNick) {
+    throw new Error("ownerUid, meetingUid y nick son requeridos");
+  }
+
+  const ownerCheck = await executeStatement(
+    "SELECT uid FROM meetings WHERE uid = ? AND owner_uid = ? LIMIT 1",
+    [cleanMeetingUid, cleanOwnerUid],
+  );
+  if (!rowsToObjects(getFirstResult(ownerCheck)).length) {
+    return { deleted: false };
+  }
+
+  await executeStatement(
+    "DELETE FROM meeting_participants WHERE meeting_uid = ? AND nick = ?",
+    [cleanMeetingUid, cleanNick],
+  );
+
+  return { deleted: true };
 }

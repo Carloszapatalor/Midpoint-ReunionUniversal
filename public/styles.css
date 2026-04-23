@@ -104,6 +104,17 @@ body.page-shell {
   padding-bottom: 22px;
 }
 
+.participant-pin-field {
+  margin-top: 8px;
+}
+
+.participant-pin-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 .hero-panel-danger {
   background:
     linear-gradient(135deg, rgba(245, 158, 11, 0.13), rgba(13, 22, 40, 0.94)),
@@ -676,6 +687,21 @@ body.page-shell {
 
 .participant-pill-muted {
   color: var(--muted);
+}
+
+.participant-pill-remove {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  margin-left: 6px;
+  padding: 0 2px;
+}
+
+.participant-pill-remove:hover {
+  color: var(--danger);
 }
 
 .utc-overview-footer {

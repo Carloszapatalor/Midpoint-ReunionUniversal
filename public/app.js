@@ -43,6 +43,11 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+async function hashPin(pin) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(pin)));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function apiFetch(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (options.body && !headers.has("Content-Type")) {
@@ -310,19 +315,31 @@ async function registerUser() {
     return;
   }
 
+  const nickPinRaw = query("auth-nick-pin").value.trim();
+  const pinHash = nickPinRaw ? await hashPin(nickPinRaw) : "";
+
   query("btn-register").disabled = true;
   setLineStatus("auth-status", "Creando usuario...", "loading");
 
   try {
     const { response, payload } = await apiFetch("/api/auth/register", {
       method: "POST",
-      body: { username, password },
+      body: { username, password, pinHash },
     });
+
+    if (response.status === 409 && payload?.requiresPin) {
+      query("auth-nick-pin")?.classList.remove("hidden");
+      query("auth-nick-pin")?.focus();
+      setLineStatus("auth-status", payload.error || "Ingresa el PIN del nick para reclamarlo.", "error");
+      return;
+    }
 
     if (!response.ok || !payload?.user || !payload?.sessionToken) {
       throw new Error(payload?.error || "No se pudo crear el usuario");
     }
 
+    query("auth-nick-pin").value = "";
+    query("auth-nick-pin")?.classList.add("hidden");
     setAuthSession(payload.user, payload.sessionToken);
     query("auth-password").value = "";
     setLineStatus("auth-status", `Usuario ${payload.user.username} creado`, "ok");
@@ -534,13 +551,14 @@ function setParticipantLoggedIn(user) {
   persistParticipantSession(user);
   query("nick").value = user.nick;
   query("nick").disabled = true;
+  query("participant-pin").disabled = true;
   query("btn-signin").textContent = "Salir";
   query("btn-save").disabled = false;
   query("local-schedule-panel")?.classList.remove("hidden");
   setMeetingStatus(`Dentro de la reunion como ${user.nick}`, "ok");
 }
 
-function setParticipantLoggedOut(options = { clearStorage: true }) {
+function setParticipantLoggedOut(options = { clearStorage: false }) {
   if (options.clearStorage && state.currentMeeting?.uid) {
     clearParticipantSession(state.currentMeeting.uid);
   }
@@ -549,6 +567,7 @@ function setParticipantLoggedOut(options = { clearStorage: true }) {
   state.localSchedule = [];
   query("nick").value = "";
   query("nick").disabled = false;
+  query("participant-pin").disabled = false;
   query("btn-signin").textContent = "Entrar";
   query("btn-save").disabled = true;
   query("local-schedule-panel")?.classList.add("hidden");
@@ -683,11 +702,45 @@ function renderParticipantList(participants) {
     return;
   }
 
+  const isOwner = !!(state.authUser?.uid && state.currentMeeting?.ownerUid === state.authUser.uid);
+
   container.innerHTML = participants
     .slice()
     .sort((left, right) => left.nick.localeCompare(right.nick))
-    .map((participant) => `<div class="participant-pill">${escapeHtml(participant.nick)}</div>`)
+    .map((participant) => {
+      const nick = escapeHtml(participant.nick);
+      if (isOwner) {
+        return `<div class="participant-pill">${nick}<button type="button" class="participant-pill-remove" onclick="kickParticipant('${nick}')" title="Quitar participante">×</button></div>`;
+      }
+      return `<div class="participant-pill">${nick}</div>`;
+    })
     .join("");
+}
+
+async function kickParticipant(nick) {
+  if (!state.authUser || !state.currentMeeting?.uid) return;
+  if (!confirm(`¿Quitar a "${nick}" de la reunion? Se libera el nick para que pueda volver a usarse.`)) return;
+
+  try {
+    const { response, payload } = await apiFetch(
+      `/api/meetings/${encodeURIComponent(state.currentMeeting.uid)}/participants/nick/${encodeURIComponent(nick)}`,
+      { method: "DELETE", auth: true },
+    );
+
+    if (!response.ok) {
+      throw new Error(payload?.error || "No se pudo quitar el participante");
+    }
+
+    if (state.currentParticipant?.nick === nick) {
+      setParticipantLoggedOut({ clearStorage: true });
+    }
+
+    await loadMeeting(state.currentMeeting.uid, { restoreParticipantSession: false });
+    setMeetingStatus(`Participante "${nick}" eliminado. El nick queda libre.`, "ok");
+  } catch (error) {
+    console.error(error);
+    setMeetingStatus(error.message || "Error al quitar participante", "error");
+  }
 }
 
 function renderUtcSummary(participants, aggregate, maxCount) {
@@ -1011,17 +1064,32 @@ async function signInParticipant() {
 
   try {
     const storedSession = readParticipantSession(state.currentMeeting.uid);
+    const pinRaw = query("participant-pin").value.trim();
+    const pinHash = pinRaw ? await hashPin(pinRaw) : "";
+
+    const lookupHeaders = {};
+    if (storedSession?.participantToken) lookupHeaders["x-participant-token"] = storedSession.participantToken;
+    if (pinHash) lookupHeaders["x-participant-pin"] = pinHash;
+
     const lookup = await apiFetch(`/api/meetings/${encodeURIComponent(state.currentMeeting.uid)}/participants/nick/${encodeURIComponent(nick)}`, {
-      headers: storedSession?.participantToken ? { "x-participant-token": storedSession.participantToken } : {},
+      headers: lookupHeaders,
     });
+
     if (lookup.response.ok && lookup.payload?.exists) {
       applyParticipantData({ ...lookup.payload.participant, participantToken: lookup.payload.participantToken });
+      query("participant-pin").value = "";
       setMeetingStatus(`Bienvenido de vuelta, ${nick}`, "ok");
       return;
     }
 
     if (lookup.response.status === 409 || lookup.payload?.reserved) {
-      throw new Error(lookup.payload?.error || "Ese nick ya fue reservado por otra persona en esta reunion");
+      if (lookup.payload?.hasPinRecovery && !pinHash) {
+        throw new Error("Este nick ya esta en uso y tiene PIN. Si eres el dueno, ingresa tu PIN para recuperarlo.");
+      }
+      if (lookup.payload?.hasPinRecovery && pinHash) {
+        throw new Error("PIN incorrecto. Este nick pertenece a otra persona.");
+      }
+      throw new Error("Este nick ya esta en uso en esta reunion.");
     }
 
     const uid = generateUID();
@@ -1031,6 +1099,7 @@ async function signInParticipant() {
         uid,
         nick,
         participantToken: storedSession?.participantToken || "",
+        pinHash,
         localSchedule: [],
         utcSchedule: [],
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
@@ -1042,6 +1111,7 @@ async function signInParticipant() {
     }
 
     applyParticipantData({ ...created.payload.participant, participantToken: created.payload.participantToken });
+    query("participant-pin").value = "";
     await loadMeeting(state.currentMeeting.uid, { restoreParticipantSession: false });
     setMeetingStatus(`Entraste como ${nick}. Marca tus horarios y guarda.`, "ok");
   } catch (error) {
@@ -1121,11 +1191,21 @@ function updateLocalTimezoneLabel() {
   if (chip) chip.textContent = tz;
 }
 
+function setupKeyboardShortcuts() {
+  query("nick")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); signInParticipant(); }
+  });
+  query("participant-pin")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); signInParticipant(); }
+  });
+}
+
 async function init() {
   renderGrid("grid-local", "L");
   renderGrid("grid-utc", "U");
   updateLocalTimezoneLabel();
   updateNavigation();
+  setupKeyboardShortcuts();
   await restoreAuthSession();
 
   const meetingUid = getMeetingUidFromUrl();
@@ -1152,5 +1232,6 @@ globalThis.deleteOwnedMeeting = deleteOwnedMeeting;
 globalThis.copyMeetingLink = copyMeetingLink;
 globalThis.signInParticipant = signInParticipant;
 globalThis.saveParticipantSchedule = saveParticipantSchedule;
+globalThis.kickParticipant = kickParticipant;
 
 init();

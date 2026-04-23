@@ -3,10 +3,12 @@ import { serveStatic } from "https://deno.land/x/hono/middleware.ts";
 import type { Context } from "https://deno.land/x/hono/mod.ts";
 import {
   deleteMeetingByOwnerTorso,
+  deleteMeetingParticipantByNickTorso,
   createPasswordRecoveryTokenTorso,
   createMeetingTorso,
   createUserTorso,
   getActivePasswordRecoveryTokenTorso,
+  getMeetingNickPinTorso,
   getMeetingParticipantByNickWithAccessTorso,
   getMeetingParticipantByNickTorso,
   getMeetingParticipantByUidWithAccessTorso,
@@ -140,6 +142,10 @@ function getParticipantToken(c: RequestContext) {
   return String(c.req.header("x-participant-token") || "").trim();
 }
 
+function getParticipantPin(c: RequestContext) {
+  return String(c.req.header("x-participant-pin") || "").trim();
+}
+
 function sanitizeUser(user: { uid: string; username: string }) {
   return { uid: user.uid, username: user.username };
 }
@@ -160,9 +166,10 @@ async function requireAuth(c: RequestContext) {
 
 app.post("/api/auth/register", async (c) => {
   try {
-    const { username, password } = await c.req.json();
+    const { username, password, pinHash } = await c.req.json();
     const cleanUsername = String(username || "").trim();
     const cleanPassword = String(password || "");
+    const cleanPinHash = String(pinHash || "").trim();
 
     if (cleanUsername.length < 3) {
       return c.json({ error: "El usuario debe tener al menos 3 caracteres" }, 400);
@@ -175,6 +182,19 @@ app.post("/api/auth/register", async (c) => {
     const existing = await getUserByUsernameTorso(cleanUsername);
     if (existing) {
       return c.json({ error: "Ese usuario ya esta en uso" }, 409);
+    }
+
+    const nickPinHash = await getMeetingNickPinTorso(cleanUsername);
+    if (nickPinHash) {
+      if (!cleanPinHash) {
+        return c.json({
+          error: "Este nick fue reservado en una reunion. Ingresa tu PIN para crear la cuenta.",
+          requiresPin: true,
+        }, 409);
+      }
+      if (nickPinHash !== cleanPinHash) {
+        return c.json({ error: "PIN incorrecto. No puedes registrarte con este nick." }, 403);
+      }
     }
 
     const now = new Date().toISOString();
@@ -386,6 +406,7 @@ app.get("/api/meetings/:meetingUid/participants/nick/:nick", async (c) => {
       c.req.param("meetingUid"),
       c.req.param("nick"),
       getParticipantToken(c),
+      getParticipantPin(c),
     );
 
     if (!result.exists) {
@@ -393,7 +414,12 @@ app.get("/api/meetings/:meetingUid/participants/nick/:nick", async (c) => {
     }
 
     if (result.reserved || !result.participant) {
-      return c.json({ exists: true, reserved: true, error: "Ese nick ya fue reservado por la primera persona que entro con el" }, 409);
+      return c.json({
+        exists: true,
+        reserved: true,
+        hasPinRecovery: result.hasPinRecovery,
+        error: "Ese nick ya fue reservado por la primera persona que entro con el",
+      }, 409);
     }
 
     return c.json({ exists: true, participant: result.participant, participantToken: result.participantToken });
@@ -403,10 +429,37 @@ app.get("/api/meetings/:meetingUid/participants/nick/:nick", async (c) => {
   }
 });
 
+app.delete("/api/meetings/:meetingUid/participants/nick/:nick", async (c) => {
+  try {
+    const user = await requireAuth(c);
+    if (!user) {
+      return c.json({ error: "No autorizado" }, 401);
+    }
+
+    const meetingUid = String(c.req.param("meetingUid") || "").trim();
+    const nick = String(c.req.param("nick") || "").trim();
+
+    if (!meetingUid || !nick) {
+      return c.json({ error: "meetingUid y nick son requeridos" }, 400);
+    }
+
+    const result = await deleteMeetingParticipantByNickTorso(user.uid, meetingUid, nick);
+    if (!result.deleted) {
+      return c.json({ error: "Reunion no encontrada o sin permisos" }, 404);
+    }
+
+    return c.json({ ok: true, deleted: true });
+  } catch (error) {
+    console.error("Error eliminando participante:", error);
+    const message = error instanceof Error ? error.message : "Error al eliminar participante";
+    return c.json({ error: message }, 500);
+  }
+});
+
 app.post("/api/meetings/:meetingUid/participants", async (c) => {
   try {
     const meetingUid = c.req.param("meetingUid");
-    const { uid, nick, participantToken, localSchedule, utcSchedule, timezone } = await c.req.json();
+    const { uid, nick, participantToken, pinHash, localSchedule, utcSchedule, timezone } = await c.req.json();
 
     if (!uid || !nick) {
       return c.json({ error: "uid y nick son requeridos" }, 400);
@@ -417,6 +470,7 @@ app.post("/api/meetings/:meetingUid/participants", async (c) => {
       uid: String(uid),
       nick: String(nick),
       participantToken: String(participantToken || ""),
+      pinHash: String(pinHash || ""),
       localSchedule: Array.isArray(localSchedule) ? localSchedule : [],
       utcSchedule: Array.isArray(utcSchedule) ? utcSchedule : [],
       timezone: String(timezone || "UTC"),
